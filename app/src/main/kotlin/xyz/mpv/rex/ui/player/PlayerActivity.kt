@@ -351,6 +351,7 @@ class PlayerActivity :
     pendingIntentExtras = true
     intentPositionMs = POSITION_NOT_SET
     logIntentExtras("onCreate", intent)
+    viewModel.markStremioHandoff(isStremioHandoff(intent))
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
     // a second time.
@@ -1231,20 +1232,101 @@ class PlayerActivity :
    * @param extras Bundle containing subtitle URIs
    */
   private fun addSubtitlesFromExtras(extras: Bundle) {
-    if (!extras.containsKey("subs")) return
+    val subUris = mutableListOf<Pair<Uri, Boolean>>()
 
-    val subList = Utils.getParcelableArray<Uri>(extras, "subs")
-    val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
+    if (extras.containsKey("subs")) {
+      val subList = Utils.getParcelableArray<Uri>(extras, "subs")
+      val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
+      for (suburi in subList) {
+        subUris.add(suburi to subsToEnable.any { it == suburi })
+      }
+    }
+
+    val stremioSubUris = parseStremioSubtitleExtras(extras)
+    if (stremioSubUris.isNotEmpty()) {
+      // Only auto-select Stremio-provided subtitles when the file has no embedded subs,
+      // otherwise the embedded ones would be silently replaced by an inferior download.
+      val select = !hasEmbeddedSubtitles()
+      for (subUrl in stremioSubUris) {
+        subUris.add(Uri.parse(subUrl) to select)
+      }
+    }
+
+    if (subUris.isEmpty()) return
 
     lifecycleScope.launch(Dispatchers.Default) {
-      for (suburi in subList) {
+      for ((suburi, selectFlag) in subUris) {
         val subfile = suburi.resolveUri(this@PlayerActivity) ?: continue
-        val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
+        val flag = if (selectFlag) "select" else "auto"
 
         Log.v(TAG, "Adding subtitles from intent extras: $subfile")
         MPVLib.command("sub-add", subfile, flag)
       }
     }
+  }
+
+  /**
+   * Parses Stremio subtitle extras that some handoff builds may include.
+   *
+   * Stremio's subtitle support for external players is undocumented, so we accept
+   * several possible shapes defensively: a plain "subtitleUrl" string, a
+   * "subtitles" string containing a plain URL, a single JSON object with a "url"
+   * field, or a JSON array of such objects.
+   */
+  private fun parseStremioSubtitleExtras(extras: Bundle): List<String> {
+    val out = mutableListOf<String>()
+
+    extras.getString("subtitleUrl")?.takeIf { it.isNotBlank() }?.let { out.add(it) }
+
+    val subtitlesJson = extras.getString("subtitles")?.takeIf { it.isNotBlank() }
+    if (subtitlesJson != null) {
+      val trimmed = subtitlesJson.trim()
+      when {
+        trimmed.startsWith("[") -> {
+          try {
+            val arr = org.json.JSONArray(trimmed)
+            for (i in 0 until arr.length()) {
+              val obj = arr.optJSONObject(i)
+              val url = obj?.optString("url")?.takeIf { it.isNotBlank() }
+              if (url != null) out.add(url)
+            }
+          } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse subtitles JSON: $subtitlesJson", e)
+          }
+        }
+        trimmed.startsWith("{") -> {
+          try {
+            val obj = org.json.JSONObject(trimmed)
+            val url = obj.optString("url").takeIf { it.isNotBlank() }
+            if (url != null) out.add(url)
+          } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse subtitle JSON: $subtitlesJson", e)
+          }
+        }
+        else -> out.add(subtitlesJson)
+      }
+    }
+
+    return out
+  }
+
+  private fun hasEmbeddedSubtitles(): Boolean {
+    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
+    for (i in 0 until count) {
+      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
+      if (type == "sub") {
+        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
+        if (external != true) return true
+      }
+    }
+    return false
+  }
+
+  private fun isStremioHandoff(intent: Intent): Boolean {
+    intent.data?.toString()?.let { uri ->
+      if (StreamTuning.isStremioTorrentUri(uri)) return true
+    }
+    return intent.extras?.containsKey("headers") == true
   }
 
   /**
@@ -2559,6 +2641,7 @@ class PlayerActivity :
     pendingIntentExtras = true
     intentPositionMs = POSITION_NOT_SET
     logIntentExtras("onNewIntent", intent)
+    viewModel.markStremioHandoff(isStremioHandoff(intent))
     // Update the intent first so getFileName uses the new intent data
     setIntent(intent)
 

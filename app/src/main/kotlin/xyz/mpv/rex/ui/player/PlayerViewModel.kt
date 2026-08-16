@@ -26,6 +26,7 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
 import xyz.mpv.rex.repository.wyzie.WyzieSubtitle
 import xyz.mpv.rex.utils.media.ChecksumUtils
 import xyz.mpv.rex.utils.media.MediaInfoParser
+import java.net.URLDecoder
 import xyz.mpv.rex.utils.media.StreamStats
 import xyz.mpv.rex.utils.media.StreamStatsFetcher
 import xyz.mpv.rex.utils.media.StreamTuning
@@ -348,6 +349,10 @@ class PlayerViewModel(
   var currentMediaTitle: String = ""
   private var lastAutoSelectedMediaTitle: String? = null
 
+  // Auto-subtitles for Stremio handoffs
+  private var stremioHandoff = false
+  private var lastAutoSubPath: String? = null
+
   // External subtitle tracking
   val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
 
@@ -477,6 +482,14 @@ class PlayerViewModel(
     viewModelScope.launch {
       while (isActive) {
         updateStreamStats()
+        delay(1000)
+      }
+    }
+
+    // Auto-download subtitles for Stremio handoffs that have no embedded subs
+    viewModelScope.launch {
+      while (isActive) {
+        maybeAutoLoadStremioSubtitles()
         delay(1000)
       }
     }
@@ -2309,6 +2322,89 @@ class PlayerViewModel(
   fun dismissStreamInfo() {
     streamStatsPanelVisible.value = false
     _streamInfoDismissed.value = true
+  }
+
+  fun markStremioHandoff(value: Boolean) {
+    stremioHandoff = value
+    if (value) lastAutoSubPath = null
+  }
+
+  /**
+   * Checks once per second whether the currently playing Stremio stream needs
+   * an online subtitle. Runs only for network streams handed off by Stremio,
+   * skips files that already have embedded subtitle tracks, and never retries
+   * the same path after a decision has been made.
+   */
+  private suspend fun maybeAutoLoadStremioSubtitles() {
+    if (!stremioHandoff) return
+    if (!subtitlesPreferences.autoStremioSubtitles.get()) return
+    if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
+
+    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+    if (path.isNullOrBlank() || path == lastAutoSubPath) return
+    if (!StreamTuning.isNetworkUri(path)) return
+
+    // Wait until the demuxer has populated the track list so that embedded-sub
+    // detection is accurate (tracks arrive slightly after playback starts).
+    val trackCount = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
+    if (trackCount <= 0) return
+
+    if (hasEmbeddedSubtitleTracks()) {
+      lastAutoSubPath = path
+      Log.d(TAG, "AutoSub: embedded subtitles present, skipping online search")
+      return
+    }
+
+    lastAutoSubPath = path
+    Log.d(TAG, "AutoSub: no embedded subtitles, searching online for '$path'")
+    autoSearchAndAttach(path)
+  }
+
+  private fun hasEmbeddedSubtitleTracks(): Boolean {
+    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
+    for (i in 0 until count) {
+      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
+      if (type == "sub") {
+        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
+        if (external != true) return true
+      }
+    }
+    return false
+  }
+
+  private suspend fun autoSearchAndAttach(path: String) {
+    val fileName = path.substringAfterLast('/').substringBefore('?')
+      .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
+    val titleInfo = MediaInfoParser.parse(currentMediaTitle)
+    val fileInfo = MediaInfoParser.parse(fileName)
+    val query = titleInfo.title.ifBlank { fileInfo.title }
+      .ifBlank { currentMediaTitle }.ifBlank { fileName }
+    if (query.isBlank()) return
+    val season = titleInfo.season ?: fileInfo.season
+    val episode = titleInfo.episode ?: fileInfo.episode
+    val year = titleInfo.year ?: fileInfo.year
+    Log.d(TAG, "AutoSub: query='$query' season=$season episode=$episode year=$year")
+
+    wyzieRepository.search(query, season, episode, year)
+      .onSuccess { results ->
+        val best = results.firstOrNull()
+        if (best == null) {
+          Log.d(TAG, "AutoSub: no subtitles found for '$query'")
+          return@onSuccess
+        }
+        Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
+        wyzieRepository.download(best, currentMediaTitle.ifBlank { query })
+          .onSuccess { uri ->
+            val currentPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+            if (currentPath != path) {
+              Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
+              return@onSuccess
+            }
+            _subtitleManager.addSubtitle(uri, select = true, silent = false)
+          }
+          .onFailure { Log.e(TAG, "AutoSub: subtitle download failed", it) }
+      }
+      .onFailure { Log.e(TAG, "AutoSub: subtitle search failed", it) }
   }
 
   private suspend fun updateStreamStats() {

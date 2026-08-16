@@ -34,6 +34,15 @@ fake full buffer; local files show no buffer indicator at all.
 When Stremio hands off a stream, playback resumes from the exact position Stremio
 provided instead of restarting from the beginning.
 
+### Auto-download subtitles for Stremio streams
+When a Stremio stream has no embedded subtitles, the player automatically searches
+online (via Wyzie's subtitle database) and loads the best-matching subtitle in your
+preferred language. Files that already have embedded subtitles are left untouched.
+If Stremio passes its own subtitle links in the handoff, those are used first.
+You can turn this off in **Settings → Subtitle settings → Auto-download subtitles
+for Stremio streams**. An API key for Wyzie is required (Settings → Subtitle
+settings → Wyzie API key).
+
 ### In-app auto-updates
 Patched builds are published through this repository. The app automatically
 checks for and installs the latest compatible build.

@@ -29,19 +29,22 @@ jobs:
           git remote add upstream https://github.com/sfsakhawat999/mpvRex
           timeout 300 git fetch upstream master 2>/dev/null || echo "fetch failed - continuing"
           BASE=$(git rev-parse upstream/master 2>/dev/null || git rev-parse HEAD)
+          PATCH=$(git rev-parse HEAD)
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "patch=$PATCH" >> "$GITHUB_OUTPUT"
           echo "Upstream master: $(git rev-parse --short $BASE)"
 
       - name: Skip if this upstream commit was already built
         id: existing
         env:
           BASE: ${{ steps.base.outputs.base }}
+          PATCH: ${{ steps.base.outputs.patch }}
           GH_TOKEN: ${{ github.token }}
         run: |
           REL=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body' 2>/dev/null || true)
-          if echo "$REL" | grep -q "Upstream: $BASE"; then
+          if echo "$REL" | grep -q "Upstream: $BASE" && echo "$REL" | grep -q "Patch: $PATCH"; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Release already built from upstream $BASE - nothing to do."
+            echo "Release already built from upstream $BASE at patch $PATCH - nothing to do."
           else
             echo "No matching release yet - rebuilding."
           fi
@@ -119,11 +122,12 @@ jobs:
         run: |
           VER=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           BASEVER=$(echo "$VER" | sed 's/-stable$//')
+          PATCH=$(git rev-parse HEAD)
           cp "app/build/outputs/apk/release/app-arm64-v8a-release.apk" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk"
           if gh release view "v${VER}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release delete "v${VER}" --repo "${{ github.repository }}" --yes --cleanup-tag
           fi
-          { cat RELEASE_NOTES.md; echo ""; echo "Upstream: $BASE"; } > /tmp/notes.md
+          { cat RELEASE_NOTES.md; echo ""; echo "Upstream: $BASE"; echo "Patch: $PATCH"; } > /tmp/notes.md
           gh release create "v${VER}" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk" \
             --repo "${{ github.repository }}" \
             --title "mpvRex-Stable $VER (patched)" \
