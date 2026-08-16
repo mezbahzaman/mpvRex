@@ -1,0 +1,1597 @@
+diff --git a/.gitignore b/.gitignore
+index e059044..14c4cee 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,5 +1,6 @@
+ *.iml
+ .gradle
++.kotlin
+ /local.properties
+ .idea
+ .DS_Store
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index b937ac6..a99d8af 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -17,8 +17,8 @@ android {
+     applicationId = "xyz.mpv.rex"
+     minSdk = 26
+     targetSdk = 36
+-    versionCode = 210
+-    versionName = "4.5.0"
++    versionCode = 216
++    versionName = "4.6.4"
+ 
+     vectorDrawables {
+       useSupportLibrary = true
+@@ -40,8 +40,8 @@ android {
+     abi {
+       isEnable = true
+       reset()
+-      include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+-      isUniversalApk = true
++      include("arm64-v8a")
++      isUniversalApk = false
+     }
+   }
+ 
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt b/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt
+index 373ea5b..1138577 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt
+@@ -62,7 +62,7 @@ class AppearancePreferences(
+   val bottomRightControls =
+     preferenceStore.getString(
+       "bottom_right_controls",
+-      "PICTURE_IN_PICTURE,ASPECT_RATIO",
++      "PICTURE_IN_PICTURE,ASPECT_RATIO,STREAM_INFO",
+     )
+ 
+   val bottomLeftControls =
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/preferences/PlayerButton.kt b/app/src/main/kotlin/xyz/mpv/rex/preferences/PlayerButton.kt
+index 380e440..1e891cb 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/preferences/PlayerButton.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/preferences/PlayerButton.kt
+@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.ZoomIn
+ import androidx.compose.material.icons.outlined.FastForward
+ import androidx.compose.material.icons.outlined.Shuffle
+ import androidx.compose.material.icons.outlined.Headset
++import androidx.compose.material.icons.outlined.Info
+ import androidx.compose.material.icons.outlined.BlurOn
+ import androidx.compose.material.icons.outlined.Timer
+ import androidx.compose.runtime.Composable
+@@ -59,6 +60,7 @@ enum class PlayerButton(
+   BACKGROUND_PLAYBACK(Icons.Outlined.Headset),
+   AMBIENT_MODE(Icons.Outlined.BlurOn),
+   SLEEP_TIMER(Icons.Outlined.Timer),
++  STREAM_INFO(Icons.Outlined.Info),
+   NONE(Icons.Outlined.Bookmarks),
+ }
+ 
+@@ -103,5 +105,6 @@ fun getPlayerButtonLabel(button: PlayerButton): String =
+     PlayerButton.BACKGROUND_PLAYBACK -> stringResource(R.string.btn_label_background_playback)
+     PlayerButton.AMBIENT_MODE -> stringResource(R.string.btn_label_ambient_mode)
+     PlayerButton.SLEEP_TIMER -> stringResource(R.string.btn_label_sleep_timer)
++    PlayerButton.STREAM_INFO -> stringResource(R.string.btn_label_stream_info)
+     PlayerButton.NONE -> stringResource(R.string.btn_label_none)
+   }
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt b/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt
+index df47ea1..e784821 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt
+@@ -18,6 +18,7 @@ class SubtitlesPreferences(
+   val preferredLanguages = preferenceStore.getString("sub_preferred_languages")
+   val disableSubtitlesByDefault = preferenceStore.getBoolean("sub_disable_by_default", false)
+   val autoloadMatchingSubtitles = preferenceStore.getBoolean("sub_autoload_enabled", true)
++  val autoStremioSubtitles = preferenceStore.getBoolean("sub_auto_stremio", true)
+ 
+   val fontsFolder = preferenceStore.getString("sub_fonts_folder")
+   val font = preferenceStore.getString("sub_font", "")
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/repository/wyzie/WyzieSearchRepository.kt b/app/src/main/kotlin/xyz/mpv/rex/repository/wyzie/WyzieSearchRepository.kt
+index b7ade6a..0f67e14 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/repository/wyzie/WyzieSearchRepository.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/repository/wyzie/WyzieSearchRepository.kt
+@@ -236,22 +236,22 @@ class WyzieSearchRepository(
+         year: String? = null
+     ): Result<List<WyzieSubtitle>> = withContext(Dispatchers.IO) {
+         try {
+-            var searchId = query
+-            if (!query.startsWith("tt", ignoreCase = true) && !query.all { it.isDigit() }) {
++            val searchIds = if (!query.startsWith("tt", ignoreCase = true) && !query.all { it.isDigit() }) {
+                 val tmdbResults = tmdbSearch(query)
+-                if (tmdbResults.isNotEmpty()) {
+-                    // If year is provided, prefer match with matching release year
+-                    val result = if (year != null) {
+-                        tmdbResults.firstOrNull { it.releaseYear == year }
+-                            ?: tmdbResults.firstOrNull { it.releaseYear?.startsWith(year.take(3)) == true }
+-                            ?: tmdbResults[0]
+-                    } else {
+-                        tmdbResults[0]
+-                    }
+-                    searchId = result.id.toString()
+-                } else {
++                if (tmdbResults.isEmpty()) {
+                     return@withContext Result.failure(Exception("Could not find media ID for '$query'"))
+                 }
++
++                tmdbResults.sortedByDescending { result ->
++                    var score = 0
++                    if (year != null && result.releaseYear == year) score += 100
++                    else if (year != null && result.releaseYear?.startsWith(year.take(3)) == true) score += 50
++                    if (season != null && result.mediaType.equals("tv", ignoreCase = true)) score += 25
++                    if (season == null && result.mediaType.equals("movie", ignoreCase = true)) score += 10
++                    score
++                }.map { it.id.toString() }.distinct().take(5)
++            } else {
++                listOf(query)
+             }
+ 
+             val selectedLangsRaw = preferences.subdlLanguages.get()
+@@ -270,16 +270,20 @@ class WyzieSearchRepository(
+             
+             val hearingImpaired = preferences.wyzieHearingImpaired.get()
+ 
+-            val results = fetchSubtitles(
+-                id = searchId,
+-                season = season,
+-                episode = episode,
+-                language = languages,
+-                format = formatParam,
+-                encoding = encodingParam,
+-                source = sourceParam,
+-                hi = if (hearingImpaired) true else null
+-            )
++            var results = emptyList<WyzieSubtitle>()
++            for (searchId in searchIds) {
++                results = fetchSubtitles(
++                    id = searchId,
++                    season = season,
++                    episode = episode,
++                    language = languages,
++                    format = formatParam,
++                    encoding = encodingParam,
++                    source = sourceParam,
++                    hi = if (hearingImpaired) true else null
++                )
++                if (results.isNotEmpty()) break
++            }
+             
+             val sortedResults = results.sortedWith(compareByDescending<WyzieSubtitle> { sub ->
+                 val name = sub.displayName.lowercase()
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
+index a7a5287..594f7ef 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
+@@ -17,6 +17,7 @@ import xyz.mpv.rex.preferences.PlayerPreferences
+ import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
+ import xyz.mpv.rex.utils.history.RecentlyPlayedOps
+ import xyz.mpv.rex.utils.media.MediaThumbnailUtils
++import xyz.mpv.rex.utils.media.StreamTuning
+ import `is`.xyz.mpv.MPVLib
+ import `is`.xyz.mpv.MPVNode
+ import org.koin.core.component.KoinComponent
+@@ -285,6 +286,7 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
+     activeTitle = title
+ 
+     val playable = uri.resolveUri(appContext) ?: uri.toString()
++    StreamTuning.applyTuningForUri(playable)
+     runCatching { MPVLib.command("loadfile", playable) }
+     runCatching { MPVLib.setPropertyBoolean("pause", false) }
+ 
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
+index 03596c2..39fe644 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
+@@ -294,6 +294,7 @@ class MPVView(
+       "volume" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
+       "hwdec-current" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
+       "media-title" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
++      "path" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
+       "demuxer-cache-duration" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
+       "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
+       "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
+index 09ac607..94d814d 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
+@@ -57,6 +57,7 @@ import xyz.mpv.rex.ui.player.controls.PlayerControls
+ import xyz.mpv.rex.ui.theme.MpvexPlayerTheme
+ import xyz.mpv.rex.utils.history.RecentlyPlayedOps
+ import xyz.mpv.rex.utils.media.HttpUtils
++import xyz.mpv.rex.utils.media.StreamTuning
+ import xyz.mpv.rex.utils.media.SubtitleOps
+ import xyz.mpv.rex.utils.media.M3UParser
+ import xyz.mpv.rex.utils.media.FolderPlaylistOps
+@@ -232,6 +233,7 @@ class PlayerActivity :
+   private var mpvInitialized = false // Track MPV initialization state
+   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
+   private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
++  private var intentPositionMs = POSITION_NOT_SET // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
+   private var lastVid = -1 // Track video track for background playback optimization
+   private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
+   private var inheritedNativeSession = false // MPV ownership came from HeadlessPlaybackController
+@@ -347,6 +349,8 @@ class PlayerActivity :
+     setContentView(binding.root)
+ 
+     pendingIntentExtras = true
++    intentPositionMs = POSITION_NOT_SET
++    logIntentExtras("onCreate", intent)
+     // The headless controller may retain MPV idle after its mini player is closed. Always take
+     // ownership before initializing so a normal video launch cannot create the global singleton
+     // a second time.
+@@ -357,6 +361,9 @@ class PlayerActivity :
+       setupMPV()
+     }
+     viewModel.onMpvCoreInitialized()
++    // Mark after the MPV core exists: constructing the ViewModel (first access) reads MPV
++    // properties, which requires an initialized core.
++    viewModel.markStremioHandoff(isStremioHandoff(intent))
+     MediaPlaybackService.createNotificationChannel(this)
+     setupAudio()
+     setupBackPressHandler()
+@@ -1189,13 +1196,34 @@ class PlayerActivity :
+     if (extras == null) return
+ 
+     extras.getInt("position", POSITION_NOT_SET).takeIf { it != POSITION_NOT_SET }?.let {
++      intentPositionMs = it
+       MPVLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
+     }
++    Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs (requested=${extras.getInt("position", POSITION_NOT_SET)})")
+ 
+     addSubtitlesFromExtras(extras)
+     setHttpHeadersFromExtras(extras)
+   }
+ 
++  /**
++   * Logs the full launch intent (action, data, type, and all extras) for debugging
++   * external launcher integration (e.g. Stremio sending a "position" extra).
++   *
++   * @param source Where the intent came from ("onCreate" or "onNewIntent")
++   * @param intent The incoming intent
++   */
++  private fun logIntentExtras(source: String, intent: Intent) {
++    Log.d(TAG, "$source intent: action=${intent.action} type=${intent.type} data=${intent.data}")
++    val extras = intent.extras
++    if (extras == null) {
++      Log.d(TAG, "$source intent: no extras")
++      return
++    }
++    for (key in extras.keySet()) {
++      Log.d(TAG, "$source intent extra[$key] = ${extras.get(key)}")
++    }
++  }
++
+   /**
+    * Adds subtitle tracks from intent extras.
+    *
+@@ -1206,15 +1234,32 @@ class PlayerActivity :
+    * @param extras Bundle containing subtitle URIs
+    */
+   private fun addSubtitlesFromExtras(extras: Bundle) {
+-    if (!extras.containsKey("subs")) return
++    val subUris = mutableListOf<Pair<Uri, Boolean>>()
+ 
+-    val subList = Utils.getParcelableArray<Uri>(extras, "subs")
+-    val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
++    if (extras.containsKey("subs")) {
++      val subList = Utils.getParcelableArray<Uri>(extras, "subs")
++      val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
++      for (suburi in subList) {
++        subUris.add(suburi to subsToEnable.any { it == suburi })
++      }
++    }
++
++    val stremioSubUris = parseStremioSubtitleExtras(extras)
++    if (stremioSubUris.isNotEmpty()) {
++      // Only auto-select Stremio-provided subtitles when the file has no embedded subs,
++      // otherwise the embedded ones would be silently replaced by an inferior download.
++      val select = !hasEmbeddedSubtitles()
++      for (subUrl in stremioSubUris) {
++        subUris.add(Uri.parse(subUrl) to select)
++      }
++    }
++
++    if (subUris.isEmpty()) return
+ 
+     lifecycleScope.launch(Dispatchers.Default) {
+-      for (suburi in subList) {
++      for ((suburi, selectFlag) in subUris) {
+         val subfile = suburi.resolveUri(this@PlayerActivity) ?: continue
+-        val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
++        val flag = if (selectFlag) "select" else "auto"
+ 
+         Log.v(TAG, "Adding subtitles from intent extras: $subfile")
+         MPVLib.command("sub-add", subfile, flag)
+@@ -1222,6 +1267,70 @@ class PlayerActivity :
+     }
+   }
+ 
++  /**
++   * Parses Stremio subtitle extras that some handoff builds may include.
++   *
++   * Stremio's subtitle support for external players is undocumented, so we accept
++   * several possible shapes defensively: a plain "subtitleUrl" string, a
++   * "subtitles" string containing a plain URL, a single JSON object with a "url"
++   * field, or a JSON array of such objects.
++   */
++  private fun parseStremioSubtitleExtras(extras: Bundle): List<String> {
++    val out = mutableListOf<String>()
++
++    extras.getString("subtitleUrl")?.takeIf { it.isNotBlank() }?.let { out.add(it) }
++
++    val subtitlesJson = extras.getString("subtitles")?.takeIf { it.isNotBlank() }
++    if (subtitlesJson != null) {
++      val trimmed = subtitlesJson.trim()
++      when {
++        trimmed.startsWith("[") -> {
++          try {
++            val arr = org.json.JSONArray(trimmed)
++            for (i in 0 until arr.length()) {
++              val obj = arr.optJSONObject(i)
++              val url = obj?.optString("url")?.takeIf { it.isNotBlank() }
++              if (url != null) out.add(url)
++            }
++          } catch (e: Exception) {
++            Log.w(TAG, "Failed to parse subtitles JSON: $subtitlesJson", e)
++          }
++        }
++        trimmed.startsWith("{") -> {
++          try {
++            val obj = org.json.JSONObject(trimmed)
++            val url = obj.optString("url").takeIf { it.isNotBlank() }
++            if (url != null) out.add(url)
++          } catch (e: Exception) {
++            Log.w(TAG, "Failed to parse subtitle JSON: $subtitlesJson", e)
++          }
++        }
++        else -> out.add(subtitlesJson)
++      }
++    }
++
++    return out
++  }
++
++  private fun hasEmbeddedSubtitles(): Boolean {
++    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
++    for (i in 0 until count) {
++      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
++      if (type == "sub") {
++        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
++        if (external != true) return true
++      }
++    }
++    return false
++  }
++
++  private fun isStremioHandoff(intent: Intent): Boolean {
++    intent.data?.toString()?.let { uri ->
++      if (StreamTuning.isStremioTorrentUri(uri)) return true
++    }
++    return intent.extras?.containsKey("headers") == true
++  }
++
+   /**
+    * Sets HTTP headers from intent extras for network playback.
+    *
+@@ -1338,12 +1447,15 @@ class PlayerActivity :
+    * @param intent The intent containing the file URI
+    * @return The resolved file path, or null if not found
+    */
+-  private fun parsePathFromIntent(intent: Intent): String? =
+-    when (intent.action) {
++  private fun parsePathFromIntent(intent: Intent): String? {
++    // Log the raw incoming URL (e.g. Stremio's local HTTP/P2P stream URL) for verification
++    Log.d(TAG, "Incoming intent action=${intent.action} data=${intent.data}")
++    return when (intent.action) {
+       Intent.ACTION_VIEW -> intent.data?.resolveUri(this)
+       Intent.ACTION_SEND -> parsePathFromSendIntent(intent)
+       else -> intent.getStringExtra("uri")
+     }
++  }
+ 
+   /**
+    * Parses the file path from a SEND intent.
+@@ -1559,6 +1671,18 @@ class PlayerActivity :
+       return
+     }
+ 
++    // 2b. Network streams (e.g. Stremio external player) have no known dimensions
++    // yet, so default to landscape immediately in Video mode to avoid the portrait
++    // flash. The aspect-ratio observer corrects it once the video actually loads.
++    if (orient == PlayerOrientation.Video) {
++      val playableUri = getPlayableUri(targetIntent)
++      if (playableUri != null && StreamTuning.isNetworkUri(playableUri)) {
++        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++        Log.d(TAG, "applyInitialOrientationFromIntent - Video mode: provisional landscape for network stream")
++        return
++      }
++    }
++
+     // 3. Fallback: try saved orientation from DB or metadata cache asynchronously
+     val targetFileName = getFileName(targetIntent).ifBlank { targetIntent.data?.lastPathSegment ?: "Unknown Video" }
+     lifecycleScope.launch(Dispatchers.IO) {
+@@ -2394,7 +2518,9 @@ class PlayerActivity :
+   private suspend fun applyPlaybackState(state: PlaybackStateEntity?) {
+     if (state == null) {
+       // Force reset position for new items in playlist
+-      MPVLib.setPropertyInt("time-pos", 0)
++      if (intentPositionMs == POSITION_NOT_SET) {
++        MPVLib.setPropertyInt("time-pos", 0)
++      }
+       return
+     }
+ 
+@@ -2458,10 +2584,14 @@ class PlayerActivity :
+     MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
+     viewModel.setVideoZoom(state.videoZoom)
+ 
+-    if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
+-      MPVLib.setPropertyInt("time-pos", state.lastPosition)
++    if (intentPositionMs == POSITION_NOT_SET) {
++      if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
++        MPVLib.setPropertyInt("time-pos", state.lastPosition)
++      } else {
++        MPVLib.setPropertyInt("time-pos", 0)
++      }
+     } else {
+-      MPVLib.setPropertyInt("time-pos", 0)
++      Log.d(TAG, "applyPlaybackState: honoring incoming position extra ${intentPositionMs}ms")
+     }
+   }
+ 
+@@ -2511,6 +2641,9 @@ class PlayerActivity :
+     super.onNewIntent(intent)
+ 
+     pendingIntentExtras = true
++    intentPositionMs = POSITION_NOT_SET
++    logIntentExtras("onNewIntent", intent)
++    viewModel.markStremioHandoff(isStremioHandoff(intent))
+     // Update the intent first so getFileName uses the new intent data
+     setIntent(intent)
+ 
+@@ -2645,6 +2778,7 @@ class PlayerActivity :
+         }
+         // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
+         lifecycleScope.launch(Dispatchers.Default) {
++          StreamTuning.applyTuningForUri(uriStr)
+           MPVLib.command("loadfile", uriStr)
+         }
+       }
+@@ -3653,6 +3787,7 @@ class PlayerActivity :
+     // Load the new video
+     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
+     lifecycleScope.launch(Dispatchers.Default) {
++      StreamTuning.applyTuningForUri(playableUri)
+       MPVLib.command("loadfile", playableUri)
+     }
+ 
+@@ -3844,6 +3979,7 @@ class PlayerActivity :
+           }
+           if (mpvInitialized) {
+             lifecycleScope.launch(Dispatchers.Default) {
++              StreamTuning.applyTuningForUri(uriStr)
+               MPVLib.command("loadfile", uriStr)
+             }
+           } else {
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
+index feecc99..b5dbbc4 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
+@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
+ import android.media.AudioManager
+ import android.net.Uri
+ import android.provider.OpenableColumns
++import android.os.SystemClock
+ import android.provider.Settings
+ import android.util.DisplayMetrics
+ import android.util.Log
+@@ -25,6 +26,11 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
+ import xyz.mpv.rex.repository.wyzie.WyzieSubtitle
+ import xyz.mpv.rex.utils.media.ChecksumUtils
+ import xyz.mpv.rex.utils.media.MediaInfoParser
++import java.net.URLDecoder
++import xyz.mpv.rex.utils.media.StreamStats
++import xyz.mpv.rex.utils.media.StreamStatsFetcher
++import xyz.mpv.rex.utils.media.StreamTuning
++import xyz.mpv.rex.utils.media.TorrentStats
+ import `is`.xyz.mpv.MPVLib
+ import kotlinx.collections.immutable.persistentListOf
+ import kotlinx.collections.immutable.toImmutableList
+@@ -253,6 +259,33 @@ class PlayerViewModel(
+   val isVolumeSliderShown = MutableStateFlow(false)
+   val volumeSliderTimestamp = MutableStateFlow(0L)
+   val brightnessSliderTimestamp = MutableStateFlow(0L)
++
++  // Live stats for network streams (Stremio HTTP / P2P torrents)
++  private val _streamStats = MutableStateFlow(StreamStats())
++  val streamStats: StateFlow<StreamStats> = _streamStats.asStateFlow()
++
++  /**
++   * Manual toggle for the stream-info overlay ("i" button). The overlay is also
++   * shown automatically while a network stream is still loading/buffering.
++   */
++  val streamStatsPanelVisible = MutableStateFlow(false)
++
++  /**
++   * True once the user explicitly dismissed the auto-shown overlay; suppresses
++   * auto-visible until the stream changes (or the user shows it again manually).
++   */
++  private val _streamInfoDismissed = MutableStateFlow(false)
++  val streamInfoDismissed: StateFlow<Boolean> = _streamInfoDismissed.asStateFlow()
++
++  /**
++   * One-shot latch: set the first time the video actually begins playing
++   * (time-pos > 0 and not paused-for-cache). Once set, the overlay is never
++   * auto-shown again for this playback — only the manual "i" button shows it.
++   * Reset when the stream changes or a new playback session starts.
++   */
++  private val _streamInfoAutoConsumed = MutableStateFlow(false)
++  val streamInfoAutoConsumed: StateFlow<Boolean> = _streamInfoAutoConsumed.asStateFlow()
++
+   val currentBrightness =
+     MutableStateFlow(
+       runCatching {
+@@ -316,6 +349,10 @@ class PlayerViewModel(
+   var currentMediaTitle: String = ""
+   private var lastAutoSelectedMediaTitle: String? = null
+ 
++  // Auto-subtitles for Stremio handoffs
++  private var stremioHandoff = false
++  private var lastAutoSubPath: String? = null
++
+   // External subtitle tracking
+   val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
+ 
+@@ -441,6 +478,22 @@ class PlayerViewModel(
+       }
+     }
+ 
++    // Poll live stream stats (Stremio P2P / HTTP) every second
++    viewModelScope.launch {
++      while (isActive) {
++        updateStreamStats()
++        delay(1000)
++      }
++    }
++
++    // Auto-download subtitles for Stremio handoffs that have no embedded subs
++    viewModelScope.launch {
++      while (isActive) {
++        maybeAutoLoadStremioSubtitles()
++        delay(1000)
++      }
++    }
++
+     // Monitor duration and AB loop changes to automatically enable precise seeking
+     viewModelScope.launch {
+       combine(
+@@ -2235,10 +2288,364 @@ class PlayerViewModel(
+     }
+   }
+ 
++  // ==================== Stream Info (Stremio P2P / HTTP stats) ====================
++
++  private var lastTorrentStats: TorrentStats? = null
++  private var activeInfoHash: String? = null
++  private var firstTorrentAttempt: Long = 0L
++  private val statsGracePeriodMs = 15_000L
++
++  // Connected-seeder count is only reported while pieces are actively being
++  // requested (`wires` empties when the stream is buffered/idle). Retain the
++  // last known value so the overlay doesn't collapse to a misleading 0.
++  private var lastKnownSeeds = 0
++
++  // Global swarm seeder count comes from the trackers themselves; polled
++  // occasionally (HTTP trackers only) since the engine doesn't expose it.
++  private var swarmSeeds: Int? = null
++  private var lastSwarmPollMs = 0L
++  private var swarmPollInFlight = false
++  private val swarmPollIntervalMs = 60_000L
++
++  // Temporary diagnostics for buffering/stutter investigation.
++  private var lastStatsPath: String? = null
++  private var lastPausedForCache = false
++  private var lastCachePausePos = 0.0
++  private var lastDiagLogMs = 0L
++  private var lastVideoPlaying = false
++
++  fun showStreamInfo() {
++    streamStatsPanelVisible.value = true
++    _streamInfoDismissed.value = false
++  }
++
++  fun dismissStreamInfo() {
++    streamStatsPanelVisible.value = false
++    _streamInfoDismissed.value = true
++  }
++
++  fun markStremioHandoff(value: Boolean) {
++    stremioHandoff = value
++    if (value) lastAutoSubPath = null
++  }
++
++  /**
++   * Checks once per second whether the currently playing Stremio stream needs
++   * an online subtitle. Runs only for network streams handed off by Stremio,
++   * skips files that already have embedded subtitle tracks, and never retries
++   * the same path after a decision has been made.
++   */
++  private suspend fun maybeAutoLoadStremioSubtitles() {
++    if (!stremioHandoff) return
++    if (!subtitlesPreferences.autoStremioSubtitles.get()) return
++    if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
++
++    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
++    if (path.isNullOrBlank() || path == lastAutoSubPath) return
++    if (!StreamTuning.isNetworkUri(path)) return
++
++    // Wait until the demuxer has populated the track list so that embedded-sub
++    // detection is accurate (tracks arrive slightly after playback starts).
++    val trackCount = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
++    if (trackCount <= 0) return
++
++    if (hasEmbeddedSubtitleTracks()) {
++      lastAutoSubPath = path
++      Log.d(TAG, "AutoSub: embedded subtitles present, skipping online search")
++      return
++    }
++
++    lastAutoSubPath = path
++    Log.d(TAG, "AutoSub: no embedded subtitles, searching online for '$path'")
++    autoSearchAndAttach(path)
++  }
++
++  private fun hasEmbeddedSubtitleTracks(): Boolean {
++    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
++    for (i in 0 until count) {
++      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
++      if (type == "sub") {
++        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
++        if (external != true) return true
++      }
++    }
++    return false
++  }
++
++  private val RELEASE_VIDEO_EXTENSIONS =
++    setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts", "m2ts", "3gp", "m3u8", "mpd")
++
++  private val RELEASE_MARKERS = listOf(
++    "720p", "1080p", "2160p", "4k", "bluray", "web-dl", "webrip", "hdtv",
++    "x264", "x265", "h264", "h265", "aac", "remux", "yify", "s01", "s02", "s03",
++  )
++
++  private fun looksLikeReleaseFilename(value: String): Boolean {
++    val low = value.lowercase()
++    if (RELEASE_VIDEO_EXTENSIONS.any { low.endsWith(it) }) return true
++    val hasYear = Regex("""(?<!\d)(?:19|20)\d{2}(?!\d)""").containsMatchIn(value)
++    val hasMarker = RELEASE_MARKERS.any { low.contains(it) }
++    return hasYear && hasMarker
++  }
++
++  private fun extractReleaseNamesFromQuery(url: String): List<String> {
++    val query = runCatching { Uri.parse(url).query }.getOrNull() ?: return emptyList()
++    val names = mutableListOf<String>()
++    for (pair in query.split("&")) {
++      val eq = pair.indexOf('=')
++      if (eq <= 0) continue
++      val value = pair.substring(eq + 1)
++      val decoded = runCatching { URLDecoder.decode(value, "UTF-8") }.getOrNull() ?: continue
++      if (decoded.startsWith("http://") || decoded.startsWith("https://")) continue
++      if (looksLikeReleaseFilename(decoded)) names += decoded
++    }
++    return names.distinct()
++  }
++
++  private fun isProxyGenericName(name: String): Boolean {
++    val low = name.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
++    if (Regex("""^(movie|film|video|stream|file|media|index|download|watch)[.\-_]\d""").containsMatchIn(low)) {
++      return true
++    }
++    return low in setOf("master", "playlist", "manifest", "index", "stream", "video", "media", "download", "watch")
++  }
++
++  private data class AutoSubSearch(
++    val query: String,
++    val season: Int?,
++    val episode: Int?,
++    val year: String?,
++  )
++
++  private fun autoSubSearchCandidates(path: String): List<AutoSubSearch> {
++    val fallbackName = path.substringAfterLast('/').substringBefore('?')
++      .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
++    val releaseNames = extractReleaseNamesFromQuery(path)
++    releaseNames.forEach { Log.d(TAG, "AutoSub: release name from query params: '$it'") }
++
++    val titleInfo = MediaInfoParser.parse(currentMediaTitle)
++    val fallbackInfo = MediaInfoParser.parse(fallbackName)
++    val releaseInfos = releaseNames.map { it to MediaInfoParser.parse(it) }
++    val imdbIds = Regex("""(?i)\btt\d{7,10}\b""")
++      .findAll(runCatching { URLDecoder.decode(path, "UTF-8") }.getOrDefault(path))
++      .map { it.value.lowercase() }
++      .toList()
++
++    return buildList {
++      imdbIds.forEach { add(AutoSubSearch(it, null, null, null)) }
++      releaseInfos.forEach { (_, info) ->
++        if (info.title.isNotBlank()) add(AutoSubSearch(info.title, info.season, info.episode, info.year))
++      }
++      if (titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle)) {
++        add(AutoSubSearch(titleInfo.title, titleInfo.season, titleInfo.episode, titleInfo.year))
++      }
++      if (fallbackInfo.title.isNotBlank() && !isProxyGenericName(fallbackName)) {
++        add(AutoSubSearch(fallbackInfo.title, fallbackInfo.season, fallbackInfo.episode, fallbackInfo.year))
++      }
++    }.distinctBy { listOf(it.query.lowercase(), it.season, it.episode, it.year) }
++  }
++
++  private suspend fun autoSearchAndAttach(path: String) {
++    val candidates = autoSubSearchCandidates(path)
++    if (candidates.isEmpty()) {
++      Log.d(TAG, "AutoSub: no usable title metadata found")
++      return
++    }
++
++    for (candidate in candidates) {
++      Log.d(TAG, "AutoSub: query='${candidate.query}' season=${candidate.season} episode=${candidate.episode} year=${candidate.year}")
++      val search = wyzieRepository.search(candidate.query, candidate.season, candidate.episode, candidate.year)
++      val failure = search.exceptionOrNull()
++      if (failure != null) {
++        Log.w(TAG, "AutoSub: search candidate failed for '${candidate.query}'", failure)
++        continue
++      }
++      val results = search.getOrThrow()
++      val best = results.firstOrNull()
++      if (best == null) {
++        Log.d(TAG, "AutoSub: no subtitles found for '${candidate.query}', trying fallback")
++        continue
++      }
++
++      Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
++      val uri = wyzieRepository.download(best, currentMediaTitle.ifBlank { candidate.query }).getOrElse {
++        Log.e(TAG, "AutoSub: subtitle download failed", it)
++        return
++      }
++      val currentPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
++      if (currentPath != path) {
++        Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
++        return
++      }
++      _subtitleManager.addSubtitle(uri, select = true, silent = false)
++      return
++    }
++    Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")
++  }
++
++  private suspend fun updateStreamStats() {
++    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
++    if (path != lastStatsPath) {
++      lastStatsPath = path
++      _streamInfoDismissed.value = false
++      _streamInfoAutoConsumed.value = false
++      lastVideoPlaying = false
++    }
++    val isNetwork = path != null && StreamTuning.isNetworkUri(path)
++    if (!isNetwork) {
++      if (_streamStats.value.isNetwork) {
++        _streamStats.value = StreamStats()
++      }
++      lastTorrentStats = null
++      activeInfoHash = null
++      firstTorrentAttempt = 0L
++      lastKnownSeeds = 0
++      swarmSeeds = null
++      _streamInfoDismissed.value = false
++      _streamInfoAutoConsumed.value = false
++      lastVideoPlaying = false
++      return
++    }
++
++    val infoHash = path?.let { StreamStatsFetcher.parseInfoHash(it) }
++    var torrentStats: TorrentStats? = null
++    if (infoHash != null) {
++      if (infoHash != activeInfoHash) {
++        activeInfoHash = infoHash
++        lastTorrentStats = null
++        firstTorrentAttempt = SystemClock.elapsedRealtime()
++        lastKnownSeeds = 0
++        swarmSeeds = null
++        lastSwarmPollMs = 0L
++        _streamInfoDismissed.value = false
++        _streamInfoAutoConsumed.value = false
++        lastVideoPlaying = false
++        val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
++        Log.d(TAG, "Torrent stream detected: $infoHash, stats URL: $statsUrl")
++      }
++      val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
++      torrentStats = statsUrl?.let {
++        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchTorrentStats(it) }
++      }
++      if (torrentStats != null) {
++        lastTorrentStats = torrentStats
++        if (torrentStats.hasWireData) {
++          lastKnownSeeds = torrentStats.seeds
++        }
++        maybePollSwarmSeeds(infoHash, torrentStats)
++      }
++    }
++
++    val bufferedSeconds =
++      (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
++        .toFloat()
++
++    // mpv can retain the last non-zero cache-speed value while a stream is
++    // paused, fully buffered, or finished. Do not present that stale value as
++    // active network traffic; keep showing downloads during cache recovery.
++    val paused = runCatching { MPVLib.getPropertyBoolean("pause") }.getOrNull() ?: false
++    val eofReached = runCatching { MPVLib.getPropertyBoolean("eof-reached") }.getOrNull() ?: false
++    val demuxerCacheIdle = runCatching { MPVLib.getPropertyBoolean("demuxer-cache-idle") }.getOrNull() ?: false
++    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
++
++    // Grace period: if the stats endpoint never responds (e.g. a false-positive
++    // hash detection on a plain HTTP stream), degrade to the HTTP-only view.
++    val stats = torrentStats ?: lastTorrentStats
++    val elapsed =
++      if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
++    val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
++
++    val speedBytesPerSec = if (!isTorrent && (paused || demuxerCacheIdle || eofReached)) {
++      0L
++    } else {
++      stats?.downloadSpeed?.takeIf { it > 0 }
++        ?: (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
++    }
++
++    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
++    if (pausedForCache && !lastPausedForCache) {
++      lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
++      Log.d(
++        TAG,
++        "BUFFER pause start: pos=${lastCachePausePos} " +
++          "cache=${"%.1f".format(runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)}s",
++      )
++    }
++    if (!pausedForCache && lastPausedForCache) {
++      val resumePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
++      Log.d(TAG, "BUFFER resume: pausePos=$lastCachePausePos resumePos=$resumePos " +
++        "delta=${"%.2f".format(resumePos - lastCachePausePos)}")
++    }
++    lastPausedForCache = pausedForCache
++
++    // One-shot auto-show: once the video actually begins playing, never
++    // auto-show the stream-info overlay again for this playback (manual "i"
++    // button is the only way). A position reset to ~0 means a new session.
++    val timePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
++    val videoPlaying = timePos > 0.5 && !pausedForCache
++    if (videoPlaying) {
++      lastVideoPlaying = true
++      if (!_streamInfoAutoConsumed.value) {
++        _streamInfoAutoConsumed.value = true
++        Log.d(TAG, "StreamInfo: video begun (pos=$timePos), auto overlay consumed")
++      }
++    } else if (lastVideoPlaying && timePos <= 0.5) {
++      lastVideoPlaying = false
++      _streamInfoAutoConsumed.value = false
++      _streamInfoDismissed.value = false
++      Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
++    }
++
++    val now = SystemClock.elapsedRealtime()
++    if (now - lastDiagLogMs > 10_000L) {
++      lastDiagLogMs = now
++      val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()
++      val codec = runCatching { MPVLib.getPropertyString("video-format") }.getOrNull()
++      val fps = runCatching { MPVLib.getPropertyDouble("container-fps") }.getOrNull()
++      val buffering = runCatching { MPVLib.getPropertyInt("cache-buffering-state") }.getOrNull()
++      val cacheSpeed = runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull()
++      Log.d(
++        TAG,
++        "DIAG isTorrent=$isTorrent pausedForCache=$pausedForCache " +
++          "buffering=$buffering cache=${"%.1f".format(bufferedSeconds)}s " +
++          "cacheSpeed=$cacheSpeed hwdec=$hwdec codec=$codec fps=$fps " +
++          "coreIdle=${runCatching { MPVLib.getPropertyBoolean("core-idle") }.getOrNull()}",
++      )
++    }
++
++    _streamStats.value =
++      StreamStats(
++        isNetwork = true,
++        isTorrent = isTorrent,
++        fetchingMetadata = isTorrent && stats == null,
++        hasTorrentStats = stats != null,
++        bufferedSeconds = bufferedSeconds,
++        seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
++        peers = stats?.peers ?: 0,
++        swarmSeeds = swarmSeeds,
++        speedBytesPerSec = speedBytesPerSec,
++      )
++  }
++
++  private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
++    if (stats.trackerUrls.isEmpty() || swarmPollInFlight) return
++    val now = SystemClock.elapsedRealtime()
++    if (now - lastSwarmPollMs < swarmPollIntervalMs) return
++    lastSwarmPollMs = now
++    swarmPollInFlight = true
++    viewModelScope.launch {
++      try {
++        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchSwarmSeeds(infoHash, stats.trackerUrls) }
++          ?.let { swarmSeeds = it }
++      } finally {
++        swarmPollInFlight = false
++      }
++    }
++  }
++
+   // ==================== Ambient Mode Integration ====================
+ 
+   fun toggleAmbientMode() = ambientModeManager.toggleAmbientMode()
+-
+   fun onOrientationChanged(isPortrait: Boolean) = ambientModeManager.onOrientationChanged(isPortrait)
+ 
+   fun resetAmbientMode() = ambientModeManager.resetAmbientMode()
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
+index b862b32..ae83c0b 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
+@@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
+ import xyz.mpv.rex.R
+ import xyz.mpv.rex.preferences.AppearancePreferences
+ import xyz.mpv.rex.preferences.AudioPreferences
++import xyz.mpv.rex.utils.media.StreamStats
++import xyz.mpv.rex.utils.media.StreamStatsFetcher
+ import xyz.mpv.rex.preferences.GesturePreferences
+ import xyz.mpv.rex.preferences.PlayerPreferences
+ import xyz.mpv.rex.preferences.preference.collectAsState
+@@ -143,6 +145,12 @@ import kotlinx.coroutines.flow.update
+ import org.koin.compose.koinInject
+ import kotlin.math.abs
+ 
++// Schemes that indicate a network stream. The buffered-content indicator on the
++// seekbar is only meaningful for these; local files always read ahead fully, so
++// showing a buffer there just fills the whole bar with misleading information.
++private val NETWORK_STREAM_SCHEMES =
++  setOf("http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "mms", "mmsh", "ftp", "ftps")
++
+ @Suppress("CompositionLocalAllowlist")
+ val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
+ 
+@@ -192,9 +200,22 @@ fun PlayerControls(
+   val position by MPVLib.propInt["time-pos"].collectAsState()
+   val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
+   val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
++  val mediaPath by MPVLib.propString["path"].collectAsState()
+   val precisePosition by viewModel.precisePosition.collectAsState()
+   val preciseDuration by viewModel.preciseDuration.collectAsState()
+   val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
++  val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
++  val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
++  val streamStats by viewModel.streamStats.collectAsState()
++  val streamStatsPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
++  val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
++  val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
++
++  val streamInfoAutoVisible =
++    streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
++      (pausedForCache == true || (coreIdle == true && eofReached != true))
++  val streamInfoVisible =
++    streamStats.isNetwork && (streamStatsPanelVisible || streamInfoAutoVisible)
+ 
+   val doubleTapSeekAmount by viewModel.doubleTapSeekAmount.collectAsState()
+   val doubleTapSeekBasePos by viewModel.doubleTapSeekBasePos.collectAsState()
+@@ -368,6 +389,7 @@ fun PlayerControls(
+         val unlockControlsButton = createRef()
+         val (bottomRightControls, bottomLeftControls) = createRefs()
+         val playerPauseButton = createRef()
++        val streamInfoOverlay = createRef()
+         val seekbar = createRef()
+         val (playerUpdates, playerLockHint) = createRefs()
+         val (customLeftButtonsRef, customRightButtonsRef) = createRefs()
+@@ -970,9 +992,22 @@ fun PlayerControls(
+ 
+           when {
+             pausedForCache == true && showLoadingCircle -> {
+-              LoadingIndicator(
+-                modifier = Modifier.size(96.dp),
+-              )
++              Column(
++                horizontalAlignment = Alignment.CenterHorizontally,
++                verticalArrangement = Arrangement.spacedBy(12.dp),
++              ) {
++                LoadingIndicator(
++                  modifier = Modifier.size(96.dp),
++                )
++                val bufferingPercent = cacheBufferingState
++                if (bufferingPercent != null && bufferingPercent in 0..100) {
++                  Text(
++                    text = stringResource(id = R.string.buffering_percent, bufferingPercent),
++                    color = Color.White.copy(alpha = 0.9f),
++                    style = MaterialTheme.typography.titleMedium,
++                  )
++                }
++              }
+             }
+ 
+             controlsShown && !areControlsLocked -> {
+@@ -1158,6 +1193,22 @@ fun PlayerControls(
+           }
+         }
+ 
++        AnimatedVisibility(
++          visible = streamInfoVisible,
++          enter = fadeIn(playerControlsEnterAnimationSpec()),
++          exit = fadeOut(playerControlsExitAnimationSpec()),
++          modifier =
++            Modifier.constrainAs(streamInfoOverlay) {
++              start.linkTo(parent.start)
++              end.linkTo(parent.end)
++              top.linkTo(parent.top)
++              bottom.linkTo(parent.bottom)
++              verticalBias = 0.30f
++            },
++        ) {
++          StreamInfoOverlayContent(streamStats = streamStats)
++        }
++
+         AnimatedVisibility(
+           visible = (controlsShown || seekBarShown) && !areControlsLocked,
+           enter =
+@@ -1217,18 +1268,27 @@ fun PlayerControls(
+               val currentPos = position?.toFloat() ?: 0f
+               val cacheDuration = demuxerCacheDuration ?: 0f
+               val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
+-              val isBuffering = cacheBufferingState ?: 0
+-
+-              // If cache duration is available and valid, use it (up to 60 seconds)
+-              if (cacheDuration > 0.1f) {
+-                (currentPos + cacheDuration).coerceAtMost(totalDuration)
+-              } else if (isBuffering > 0 && isBuffering < 100) {
+-                // Show estimated buffer when actively buffering (up to 60 seconds)
+-                val estimatedBuffer = (isBuffering / 100f) * 60f
+-                (currentPos + estimatedBuffer).coerceAtMost(totalDuration)
++
++              // Media opened from disk (or a content/file URI) is always read
++              // ahead by the demuxer, so a "buffered" indicator would just fill
++              // the whole bar. Only show it for real network streams.
++              val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
++              val isNetworkMedia = mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
++
++              if (!isNetworkMedia) {
++                // Local file: no buffered-content indicator.
++                currentPos.coerceAtMost(totalDuration)
+               } else {
+-                // When not actively buffering and cache is full, show 1 minute buffer
+-                (currentPos + 60f).coerceAtMost(totalDuration)
++                // Network stream: show the REAL amount buffered by the demuxer
++                // cache, and nothing else. While (re)buffering the cache is
++                // depleted, so there is nothing playable ahead of the current
++                // position yet — hide the indicator instead of fabricating a
++                // fake buffer that looked like progress while the stream stalled.
++                if (cacheDuration > 0.1f) {
++                  (currentPos + cacheDuration).coerceAtMost(totalDuration)
++                } else {
++                  currentPos.coerceAtMost(totalDuration)
++                }
+               }
+             }
+           }
+@@ -1890,3 +1950,63 @@ fun PlayerControls(
+   }
+ }
+ 
++@Composable
++private fun StreamInfoOverlayContent(streamStats: StreamStats) {
++  val bufferedSeconds = streamStats.bufferedSeconds.toInt().coerceAtLeast(0)
++  val speedText = StreamStatsFetcher.formatSpeed(streamStats.speedBytesPerSec)
++
++  Row(
++    verticalAlignment = Alignment.CenterVertically,
++    horizontalArrangement = Arrangement.spacedBy(10.dp),
++    modifier = Modifier
++      .clip(RoundedCornerShape(12.dp))
++      .background(Color.Black.copy(alpha = 0.55f))
++      .padding(horizontal = 16.dp, vertical = 10.dp),
++  ) {
++    if (streamStats.fetchingMetadata) {
++      CircularProgressIndicator(
++        modifier = Modifier.size(18.dp),
++        color = Color.White.copy(alpha = 0.9f),
++        strokeWidth = 2.dp,
++      )
++      Text(
++        text = stringResource(R.string.stream_stats_fetching_metadata),
++        color = Color.White.copy(alpha = 0.9f),
++        style = MaterialTheme.typography.bodyMedium,
++      )
++    } else {
++      val line =
++        if (streamStats.isTorrent) {
++          val swarmSeeds = streamStats.swarmSeeds
++          if (swarmSeeds != null) {
++            stringResource(
++              R.string.stream_stats_line_swarm,
++              bufferedSeconds,
++              streamStats.seeds,
++              streamStats.peers,
++              speedText,
++              swarmSeeds,
++            )
++          } else {
++            stringResource(
++              R.string.stream_stats_line,
++              bufferedSeconds,
++              streamStats.seeds,
++              streamStats.peers,
++              speedText,
++            )
++          }
++        } else {
++          stringResource(R.string.stream_stats_line_http, bufferedSeconds, speedText)
++        }
++      Text(
++        text = line,
++        color = Color.White.copy(alpha = 0.95f),
++        style = MaterialTheme.typography.bodyMedium,
++        fontWeight = FontWeight.Medium,
++        maxLines = 1,
++      )
++    }
++  }
++}
++
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
+index 1c39a0b..34ae325 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
+@@ -54,6 +54,8 @@ import androidx.compose.material.icons.filled.Headset
+ import androidx.compose.material.icons.filled.HeadsetOff
+ import androidx.compose.material.icons.filled.BlurOn
+ import androidx.compose.material.icons.outlined.BlurOn
++import androidx.compose.material.icons.outlined.Info
++import androidx.compose.material.icons.filled.Info
+ import androidx.compose.material.icons.outlined.Timer
+ import androidx.compose.material.icons.outlined.Memory
+ import androidx.compose.ui.draw.rotate
+@@ -92,6 +94,7 @@ import xyz.mpv.rex.ui.player.controls.components.CurrentChapter
+ import xyz.mpv.rex.ui.theme.controlColor
+ import xyz.mpv.rex.ui.theme.spacing
+ import dev.vivvvek.seeker.Segment
++import `is`.xyz.mpv.MPVLib
+ 
+ @Composable
+ fun RenderPlayerButton(
+@@ -1263,6 +1266,78 @@ fun RenderPlayerButton(
+       }
+     }
+ 
++    PlayerButton.STREAM_INFO -> {
++      val streamStats by viewModel.streamStats.collectAsState()
++      val isStreamInfoPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
++      val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
++      val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
++      val pausedForCache by MPVLib.propBoolean["paused-for-cache"].collectAsState()
++      val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
++      val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
++      val streamInfoAutoVisible =
++        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
++          (pausedForCache == true || (coreIdle == true && eofReached != true))
++      val isStreamInfoVisible = streamStats.isNetwork && (isStreamInfoPanelVisible || streamInfoAutoVisible)
++      val toggleStreamInfo = {
++        clickEvent()
++        if (isStreamInfoVisible) viewModel.dismissStreamInfo() else viewModel.showStreamInfo()
++      }
++
++      if (isMoreSheet) {
++        Surface(
++          shape = CircleShape,
++          color = if (isStreamInfoVisible) activeSurfaceColor else surfaceColor,
++          contentColor = if (isStreamInfoVisible) activeContentColor else contentColor,
++          border = if (isStreamInfoVisible) activeBorderColor else borderColor,
++          modifier = Modifier
++            .height(buttonSize)
++            .clip(CircleShape)
++            .clickable(onClick = toggleStreamInfo)
++        ) {
++          Row(
++            verticalAlignment = Alignment.CenterVertically,
++            horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
++            modifier = Modifier.padding(horizontal = MaterialTheme.spacing.smaller)
++          ) {
++            Icon(
++              imageVector = if (isStreamInfoVisible) Icons.Filled.Info else Icons.Outlined.Info,
++              contentDescription = null,
++              modifier = Modifier.size(24.dp)
++            )
++            Text(
++              text = stringResource(R.string.btn_label_stream_info),
++              style = MaterialTheme.typography.bodyMedium,
++              maxLines = 1,
++            )
++          }
++        }
++      } else {
++        Surface(
++          shape = CircleShape,
++          color = if (isStreamInfoVisible) activeSurfaceColor else surfaceColor,
++          contentColor = if (isStreamInfoVisible) activeContentColor else contentColor,
++          border = if (isStreamInfoVisible) activeBorderColor else borderColor,
++          modifier = Modifier
++            .size(buttonSize)
++            .clip(CircleShape)
++            .clickable(
++              interactionSource = remember { MutableInteractionSource() },
++              indication = ripple(bounded = true),
++              onClick = toggleStreamInfo
++            ),
++        ) {
++          Box(contentAlignment = Alignment.Center) {
++            Icon(
++              imageVector = if (isStreamInfoVisible) Icons.Filled.Info else Icons.Outlined.Info,
++              contentDescription = stringResource(R.string.btn_label_stream_info),
++              tint = if (isStreamInfoVisible) activeContentColor else contentColor,
++              modifier = Modifier.size(24.dp)
++            )
++          }
++        }
++      }
++    }
++
+     PlayerButton.NONE -> { /* Do nothing */
+     }
+   }
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
+index 8284ff2..fee01b4 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
+@@ -261,6 +261,21 @@ object SubtitlesPreferencesScreen : Screen {
+ 
+               PreferenceDivider()
+ 
++              val autoStremio by preferences.autoStremioSubtitles.collectAsState()
++              SwitchPreference(
++                value = autoStremio,
++                onValueChange = { preferences.autoStremioSubtitles.set(it) },
++                title = { Text(stringResource(R.string.pref_subtitles_auto_stremio_title)) },
++                summary = {
++                  Text(
++                    stringResource(R.string.pref_subtitles_auto_stremio_summary),
++                    color = MaterialTheme.colorScheme.outline,
++                  )
++                },
++              )
++
++              PreferenceDivider()
++
+               val overrideAss by preferences.overrideAssSubs.collectAsState()
+               SwitchPreference(
+                 value = overrideAss,
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
+new file mode 100644
+index 0000000..378067b
+--- /dev/null
++++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
+@@ -0,0 +1,197 @@
++package xyz.mpv.rex.utils.media
++
++import android.net.Uri
++import org.json.JSONObject
++import java.net.HttpURLConnection
++import java.net.URL
++
++/**
++ * Live stats for network streams (Stremio HTTP / P2P torrents).
++ *
++ * For torrent streams, Stremio's streaming server (local WebTorrent HTTP engine)
++ * exposes a real-time JSON endpoint: `{origin}/{infoHash}/stats.json`.
++ * Polled once per second; combined with mpv's own cache properties.
++ */
++data class StreamStats(
++  val isNetwork: Boolean = false,
++  val isTorrent: Boolean = false,
++  val fetchingMetadata: Boolean = false,
++  val hasTorrentStats: Boolean = false,
++  val bufferedSeconds: Float = 0f,
++  val seeds: Int = 0,
++  val peers: Int = 0,
++  val swarmSeeds: Int? = null,
++  val speedBytesPerSec: Long = 0,
++)
++
++data class TorrentStats(
++  val downloadSpeed: Long,
++  val seeds: Int,
++  val peers: Int,
++  /** True when the engine reported active wire connections this poll (real seeder data). */
++  val hasWireData: Boolean,
++  /** HTTP(S) tracker announce URLs advertised by the engine's `sources[]`. */
++  val trackerUrls: List<String>,
++)
++
++object StreamStatsFetcher {
++
++  private const val STATS_TIMEOUT_MS = 1500
++  private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
++
++  /**
++   * Detects a Stremio torrent URL. The infoHash is the first path segment
++   * (e.g. `{origin}/{infoHash}/{filename}`), or an `infoHash=` query parameter.
++   */
++  fun parseInfoHash(url: String): String? {
++    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
++    uri.pathSegments.getOrNull(0)?.takeIf { INFO_HASH_REGEX.matches(it) }?.let { return it.lowercase() }
++    return uri.getQueryParameter("infoHash")?.takeIf { INFO_HASH_REGEX.matches(it) }?.lowercase()
++  }
++
++  /** Stats endpoint for a torrent: `{scheme}://{host}:{port}/{infoHash}/stats.json`. */
++  fun buildStatsUrl(streamUrl: String, infoHash: String): String? {
++    val base = runCatching {
++      val uri = Uri.parse(streamUrl)
++      "${uri.scheme}://${uri.host}:${uri.port}"
++    }.getOrNull() ?: return null
++    return "$base/$infoHash/stats.json"
++  }
++
++  fun fetchTorrentStats(statsUrl: String): TorrentStats? {
++    var connection: HttpURLConnection? = null
++    return try {
++      connection = URL(statsUrl).openConnection() as HttpURLConnection
++      connection.connectTimeout = STATS_TIMEOUT_MS
++      connection.readTimeout = STATS_TIMEOUT_MS
++      connection.requestMethod = "GET"
++      connection.setRequestProperty("Accept", "application/json")
++      if (connection.responseCode !in 200..299) {
++        null
++      } else {
++        val text = connection.inputStream.bufferedReader().use { it.readText() }
++        val json = JSONObject(text)
++        val filesReady = (json.optJSONArray("files")?.length() ?: 0) > 0
++        if (!filesReady) {
++          // Torrent metadata not resolved yet (engine knows the hash but not the files)
++          null
++        } else {
++          val wires = json.optJSONArray("wires")
++          val hasWireData = (wires?.length() ?: 0) > 0
++          TorrentStats(
++            downloadSpeed = (json.optDouble("downloadSpeed", 0.0)).toLong(),
++            // `swarmSize` is a constant tracker total (not seeders). Only
++            // actually-connected peers expose a seeder flag, so count those.
++            seeds = if (hasWireData) countSeeders(json) else 0,
++            peers = json.optInt("peers", 0),
++            hasWireData = hasWireData,
++            trackerUrls = httpTrackerUrls(json),
++          )
++        }
++      }
++    } catch (_: Exception) {
++      null
++    } finally {
++      connection?.disconnect()
++    }
++  }
++
++  /**
++   * Queries the torrent's HTTP(S) trackers (announce) and returns the maximum
++   * tracker-reported seeder count (`complete`). Returns null when every tracker
++   * fails or none are HTTP(S). Trackers are the only reliable source of the
++   * global swarm seeder count; WebTorrent's own engine does not expose one.
++   */
++  fun fetchSwarmSeeds(infoHash: String, trackerUrls: List<String>): Int? {
++    val rawHash = hexToBytes(infoHash) ?: return null
++    val infoHashParam = percentEncode(rawHash)
++    val peerId = percentEncode("-MP0001-0123456789ab".toByteArray(Charsets.ISO_8859_1))
++    val query =
++      "info_hash=$infoHashParam&peer_id=$peerId&port=6881" +
++        "&uploaded=0&downloaded=0&left=0&compact=1&numwant=0&event=started"
++
++    var maxSeeds: Int? = null
++    for (tracker in trackerUrls) {
++      var connection: HttpURLConnection? = null
++      try {
++        val announceUrl = "$tracker?$query"
++        connection = URL(announceUrl).openConnection() as HttpURLConnection
++        connection.connectTimeout = 3000
++        connection.readTimeout = 3000
++        connection.requestMethod = "GET"
++        connection.setRequestProperty("User-Agent", "mpvRex/4.5")
++        if (connection.responseCode in 200..299) {
++          val body = connection.inputStream.readBytes().toString(Charsets.ISO_8859_1)
++          bencodeInt(body, "complete")?.let { complete ->
++            maxSeeds = maxOf(maxSeeds ?: 0, complete)
++          }
++        }
++      } catch (_: Exception) {
++        // Individual trackers often fail; keep trying the rest.
++      } finally {
++        connection?.disconnect()
++      }
++    }
++    return maxSeeds
++  }
++
++  /** Reads a bencoded integer value: `{key-len}:{key}i{value}e`. */
++  private fun bencodeInt(body: String, key: String): Int? {
++    val marker = "${key.length}:$key"
++    val idx = body.indexOf(marker)
++    if (idx < 0) return null
++    val valueStart = idx + marker.length
++    if (valueStart >= body.length || body[valueStart] != 'i') return null
++    val valueEnd = body.indexOf('e', valueStart)
++    if (valueEnd < 0) return null
++    return body.substring(valueStart + 1, valueEnd).toIntOrNull()
++  }
++
++  /** HTTP(S) tracker announce URLs from the engine's `sources[]`. */
++  private fun httpTrackerUrls(json: JSONObject): List<String> {
++    val sources = json.optJSONArray("sources") ?: return emptyList()
++    val urls = mutableListOf<String>()
++    for (i in 0 until sources.length()) {
++      val url = sources.optJSONObject(i)?.optString("url") ?: continue
++      if (url.startsWith("tracker:http://") || url.startsWith("tracker:https://")) {
++        urls.add(url.removePrefix("tracker:"))
++      }
++    }
++    return urls
++  }
++
++  private fun countSeeders(json: JSONObject): Int {
++    val wires = json.optJSONArray("wires") ?: return 0
++    var seeds = 0
++    for (i in 0 until wires.length()) {
++      if (wires.optJSONObject(i)?.optBoolean("isSeeder", false) == true) seeds++
++    }
++    return seeds
++  }
++
++  private fun hexToBytes(hex: String): ByteArray? {
++    if (hex.length != 40) return null
++    return try {
++      ByteArray(20) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
++    } catch (_: NumberFormatException) {
++      null
++    }
++  }
++
++  private fun percentEncode(bytes: ByteArray): String {
++    val hex = "0123456789abcdef"
++    val sb = StringBuilder(bytes.size * 3)
++    for (b in bytes) {
++      sb.append('%').append(hex[(b.toInt() ushr 4) and 0xF]).append(hex[b.toInt() and 0xF])
++    }
++    return sb.toString()
++  }
++
++  fun formatSpeed(bytesPerSec: Long): String =
++    when {
++      bytesPerSec >= 1_000_000 -> String.format("%.1f MB/s", bytesPerSec / 1_000_000f)
++      bytesPerSec >= 1_000 -> "${bytesPerSec / 1_000} KB/s"
++      bytesPerSec > 0 -> "$bytesPerSec B/s"
++      else -> "0 KB/s"
++    }
++}
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
+new file mode 100644
+index 0000000..8527c3d
+--- /dev/null
++++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
+@@ -0,0 +1,56 @@
++package xyz.mpv.rex.utils.media
++
++import android.net.Uri
++import `is`.xyz.mpv.MPVLib
++
++/**
++ * Applies mpv options that improve playback smoothness for network and P2P (torrent)
++ * streams, e.g. when used as an external player for Stremio.
++ *
++ * Must be called right before `loadfile` so the options are picked up by the
++ * upcoming demuxer. Options are reset to safe defaults for local files.
++ */
++object StreamTuning {
++
++  private val NETWORK_SCHEMES =
++    setOf("http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "mms", "mmsh", "ftp", "ftps")
++
++  /** Hosts used by Stremio's WebTorrent server and in-app SMB/WebDAV/FTP proxies. */
++  private val LOCAL_PROXY_HOSTS = setOf("127.0.0.1", "localhost", "0.0.0.0")
++
++  fun isNetworkUri(uri: String): Boolean {
++    val scheme = runCatching { Uri.parse(uri).scheme }.getOrNull()?.lowercase()
++    return scheme in NETWORK_SCHEMES
++  }
++
++  fun isStremioTorrentUri(uri: String): Boolean {
++    if (!isNetworkUri(uri)) return false
++    val host = runCatching { Uri.parse(uri).host }.getOrNull()?.lowercase()
++    return host in LOCAL_PROXY_HOSTS
++  }
++
++  fun applyTuningForUri(uri: String?) {
++    if (uri.isNullOrBlank()) return
++    when {
++      isStremioTorrentUri(uri) -> {
++        // Torrent (Stremio WebTorrent) server: peers are slow, so read far ahead
++        // and tolerate long stalls so playback doesn't freeze.
++        MPVLib.setOptionString("network-timeout", "45")
++        MPVLib.setOptionString("demuxer-max-bytes", "512MiB")
++        MPVLib.setOptionString("demuxer-readahead-secs", "45")
++      }
++      isNetworkUri(uri) -> {
++        // Regular HTTP(S)/HLS/RTSP streams: modestly larger read-ahead cushion.
++        MPVLib.setOptionString("network-timeout", "30")
++        MPVLib.setOptionString("demuxer-max-bytes", "256MiB")
++        MPVLib.setOptionString("demuxer-readahead-secs", "20")
++      }
++      else -> {
++        // Local files: reset to mpv defaults so cached tuning doesn't linger.
++        MPVLib.setOptionString("network-timeout", "30")
++        MPVLib.setOptionString("demuxer-max-bytes", "150MiB")
++        MPVLib.setOptionString("demuxer-readahead-secs", "10")
++      }
++    }
++  }
++}
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt
+index b99862e..b6eb3d0 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt
+@@ -91,7 +91,7 @@ class UpdateManager(
+             return null
+         }
+         
+-        val release = getLatestRelease("https://api.github.com/repos/sfsakhawat999/mpvRex/releases/latest")
++        val release = getLatestRelease("https://api.github.com/repos/mezbahzaman/mpvRex/releases/latest")
+         val currentVersion = BuildConfig.VERSION_NAME.replace("-dev", "")
+         val remoteVersion = release.tagName.removePrefix("v")
+         val prefs = context.getSharedPreferences("mpvEx_prefs", Context.MODE_PRIVATE)
+@@ -131,9 +131,14 @@ class UpdateManager(
+     }
+ 
+     private fun isNewerVersion(remote: String, current: String): Boolean {
+-        val rParts = remote.split(".").map { it.toIntOrNull() ?: 0 }
+-        val cParts = current.split(".").map { it.toIntOrNull() ?: 0 }
+-        
++        // Tolerate suffixes like "-stable" or "-dev" on any component
++        // (e.g. "4.5.1-stable" -> [4, 5, 1]).
++        fun normalize(version: String): List<Int> =
++            version.split(".").map { it.substringBefore("-").trim().toIntOrNull() ?: 0 }
++
++        val rParts = normalize(remote)
++        val cParts = normalize(current)
++
+         for (i in 0 until maxOf(rParts.size, cParts.size)) {
+             val r = rParts.getOrElse(i) { 0 }
+             val c = cParts.getOrElse(i) { 0 }
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 243e0b7..b9fe28f 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -182,6 +182,11 @@
+     <string name="pref_player_custom_skip_duration_summary">Duration to skip forward on custom skip button</string>
+     <string name="pref_player_seeking_title">Seeking</string>
+     <string name="pref_player_close_after_eof">Close after the end of playback</string>
++    <string name="buffering_percent">Buffering %1$d%%</string>
++    <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
++    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$s</string>
++    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$s • %5$d in swarm</string>
++    <string name="stream_stats_line_http">%1$ds buffered • %2$s</string>
+     <string name="pref_player_remember_brightness">Remember display brightness</string>
+ 
+     <string name="pref_player_gestures">Gestures</string>
+@@ -280,6 +285,8 @@
+     <string name="pref_subtitles_disable_by_default_summary">Subtitles will not appear unless you manually enable them during playback.</string>
+     <string name="pref_subtitles_autoload_title">Automatically load subtitles</string>
+     <string name="pref_subtitles_autoload_summary">Automatically load external subtitles with the same name.</string>
++    <string name="pref_subtitles_auto_stremio_title">Auto-download subtitles for Stremio streams</string>
++    <string name="pref_subtitles_auto_stremio_summary">When a Stremio stream has no embedded subtitles, automatically search for and load the best-matching subtitle.</string>
+     <string name="pref_subtitles_open_at_video_location_title">Open at video location</string>
+     <string name="pref_subtitles_open_at_video_location_summary">Open file picker in the same folder as the current video</string>
+     <string name="pref_subtitles_custom_picker_folder_title">Default selection folder</string>
+@@ -1025,6 +1032,7 @@
+     <string name="btn_label_background_playback">Background Playback</string>
+     <string name="btn_label_ambient_mode">Ambience Mode</string>
+     <string name="btn_label_sleep_timer">Sleep Timer</string>
++    <string name="btn_label_stream_info">Stream Info</string>
+     <string name="btn_label_none">None</string>
+ 
+ 
