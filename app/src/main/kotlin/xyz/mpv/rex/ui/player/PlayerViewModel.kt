@@ -2373,7 +2373,7 @@ class PlayerViewModel(
   }
 
   private val RELEASE_VIDEO_EXTENSIONS =
-    setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts", "m2ts", "3gp")
+    setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts", "m2ts", "3gp", "m3u8", "mpd")
 
   private val RELEASE_MARKERS = listOf(
     "720p", "1080p", "2160p", "4k", "bluray", "web-dl", "webrip", "hdtv",
@@ -2388,75 +2388,99 @@ class PlayerViewModel(
     return hasYear && hasMarker
   }
 
-  private fun extractReleaseNameFromQuery(url: String): String? {
-    val query = runCatching { Uri.parse(url).query }.getOrNull() ?: return null
+  private fun extractReleaseNamesFromQuery(url: String): List<String> {
+    val query = runCatching { Uri.parse(url).query }.getOrNull() ?: return emptyList()
+    val names = mutableListOf<String>()
     for (pair in query.split("&")) {
       val eq = pair.indexOf('=')
       if (eq <= 0) continue
       val value = pair.substring(eq + 1)
       val decoded = runCatching { URLDecoder.decode(value, "UTF-8") }.getOrNull() ?: continue
       if (decoded.startsWith("http://") || decoded.startsWith("https://")) continue
-      if (looksLikeReleaseFilename(decoded)) return decoded
+      if (looksLikeReleaseFilename(decoded)) names += decoded
     }
-    return null
+    return names.distinct()
   }
 
   private fun isProxyGenericName(name: String): Boolean {
-    val low = name.lowercase()
+    val low = name.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
     if (Regex("""^(movie|film|video|stream|file|media|index|download|watch)[.\-_]\d""").containsMatchIn(low)) {
       return true
     }
-    return false
+    return low in setOf("master", "playlist", "manifest", "index", "stream", "video", "media", "download", "watch")
   }
 
-  private suspend fun autoSearchAndAttach(path: String) {
+  private data class AutoSubSearch(
+    val query: String,
+    val season: Int?,
+    val episode: Int?,
+    val year: String?,
+  )
+
+  private fun autoSubSearchCandidates(path: String): List<AutoSubSearch> {
     val fallbackName = path.substringAfterLast('/').substringBefore('?')
       .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
-    val queryParamName = extractReleaseNameFromQuery(path)
-    if (queryParamName != null) {
-      Log.d(TAG, "AutoSub: release name from query params: '$queryParamName'")
-    }
+    val releaseNames = extractReleaseNamesFromQuery(path)
+    releaseNames.forEach { Log.d(TAG, "AutoSub: release name from query params: '$it'") }
 
     val titleInfo = MediaInfoParser.parse(currentMediaTitle)
     val fallbackInfo = MediaInfoParser.parse(fallbackName)
-    val paramInfo = queryParamName?.let { MediaInfoParser.parse(it) }
+    val releaseInfos = releaseNames.map { it to MediaInfoParser.parse(it) }
+    val imdbIds = Regex("""(?i)\btt\d{7,10}\b""")
+      .findAll(runCatching { URLDecoder.decode(path, "UTF-8") }.getOrDefault(path))
+      .map { it.value.lowercase() }
+      .toList()
 
-    // Prefer the most film-like candidate: a real title extra, then a release name found
-    // in the URL query (e.g. a Stremio proxy passes KEY5=Hunter.Killer.2018.1080p...),
-    // then the proxy path basename (which may be a generic id like movie.12147.2018...).
-    val rawName = when {
-      titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle) -> currentMediaTitle
-      paramInfo != null && paramInfo.title.isNotBlank() -> queryParamName!!
-      else -> fallbackName
-    }
-    val fileInfo = MediaInfoParser.parse(rawName)
-    val query = fileInfo.title.ifBlank { rawName }.ifBlank { currentMediaTitle }
-    if (query.isBlank()) return
-    val season = titleInfo.season ?: paramInfo?.season ?: fallbackInfo.season
-    val episode = titleInfo.episode ?: paramInfo?.episode ?: fallbackInfo.episode
-    val year = titleInfo.year ?: paramInfo?.year ?: fallbackInfo.year
-    Log.d(TAG, "AutoSub: query='$query' season=$season episode=$episode year=$year")
-
-    wyzieRepository.search(query, season, episode, year)
-      .onSuccess { results ->
-        val best = results.firstOrNull()
-        if (best == null) {
-          Log.d(TAG, "AutoSub: no subtitles found for '$query'")
-          return@onSuccess
-        }
-        Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
-        wyzieRepository.download(best, currentMediaTitle.ifBlank { query })
-          .onSuccess { uri ->
-            val currentPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
-            if (currentPath != path) {
-              Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
-              return@onSuccess
-            }
-            _subtitleManager.addSubtitle(uri, select = true, silent = false)
-          }
-          .onFailure { Log.e(TAG, "AutoSub: subtitle download failed", it) }
+    return buildList {
+      imdbIds.forEach { add(AutoSubSearch(it, null, null, null)) }
+      releaseInfos.forEach { (_, info) ->
+        if (info.title.isNotBlank()) add(AutoSubSearch(info.title, info.season, info.episode, info.year))
       }
-      .onFailure { Log.e(TAG, "AutoSub: subtitle search failed", it) }
+      if (titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle)) {
+        add(AutoSubSearch(titleInfo.title, titleInfo.season, titleInfo.episode, titleInfo.year))
+      }
+      if (fallbackInfo.title.isNotBlank() && !isProxyGenericName(fallbackName)) {
+        add(AutoSubSearch(fallbackInfo.title, fallbackInfo.season, fallbackInfo.episode, fallbackInfo.year))
+      }
+    }.distinctBy { listOf(it.query.lowercase(), it.season, it.episode, it.year) }
+  }
+
+  private suspend fun autoSearchAndAttach(path: String) {
+    val candidates = autoSubSearchCandidates(path)
+    if (candidates.isEmpty()) {
+      Log.d(TAG, "AutoSub: no usable title metadata found")
+      return
+    }
+
+    for (candidate in candidates) {
+      Log.d(TAG, "AutoSub: query='${candidate.query}' season=${candidate.season} episode=${candidate.episode} year=${candidate.year}")
+      val search = wyzieRepository.search(candidate.query, candidate.season, candidate.episode, candidate.year)
+      val failure = search.exceptionOrNull()
+      if (failure != null) {
+        Log.w(TAG, "AutoSub: search candidate failed for '${candidate.query}'", failure)
+        continue
+      }
+      val results = search.getOrThrow()
+      val best = results.firstOrNull()
+      if (best == null) {
+        Log.d(TAG, "AutoSub: no subtitles found for '${candidate.query}', trying fallback")
+        continue
+      }
+
+      Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
+      val uri = wyzieRepository.download(best, currentMediaTitle.ifBlank { candidate.query }).getOrElse {
+        Log.e(TAG, "AutoSub: subtitle download failed", it)
+        return
+      }
+      val currentPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+      if (currentPath != path) {
+        Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
+        return
+      }
+      _subtitleManager.addSubtitle(uri, select = true, silent = false)
+      return
+    }
+    Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")
   }
 
   private suspend fun updateStreamStats() {

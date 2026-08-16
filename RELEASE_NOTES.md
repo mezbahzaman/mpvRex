@@ -7,6 +7,11 @@ the original app. If you don't use Stremio, we recommend the original mpvRex.
 
 ## What's new in this build
 
+### More reliable automatic subtitles
+Automatic Wyzie subtitle loading now recognizes direct files, HLS (`m3u8`), DASH
+(`mpd`), HTTP proxy streams, and P2P handoffs. It tries IMDb IDs and multiple
+parsed title sources instead of abandoning a stream after one weak title match.
+
 ### Live stream information
 While a Stremio stream is playing — a peer-to-peer torrent or a direct HTTP
 stream — a small overlay shows what the player is doing in real time:
