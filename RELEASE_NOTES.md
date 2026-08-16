@@ -51,6 +51,10 @@ checks for and installs the latest compatible build.
 Version comparison now ignores build suffixes, so newer patched releases are
 correctly detected even when they share the same major.minor prefix.
 
+### Fixed: crash when launching a video
+The player no longer constructs its ViewModel before the MPV core is ready,
+which could abort playback before it started (local files and Stremio streams).
+
 ## Releases
 
 Get the latest build from the

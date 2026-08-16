@@ -351,7 +351,6 @@ class PlayerActivity :
     pendingIntentExtras = true
     intentPositionMs = POSITION_NOT_SET
     logIntentExtras("onCreate", intent)
-    viewModel.markStremioHandoff(isStremioHandoff(intent))
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
     // a second time.
@@ -362,6 +361,9 @@ class PlayerActivity :
       setupMPV()
     }
     viewModel.onMpvCoreInitialized()
+    // Mark after the MPV core exists: constructing the ViewModel (first access) reads MPV
+    // properties, which requires an initialized core.
+    viewModel.markStremioHandoff(isStremioHandoff(intent))
     MediaPlaybackService.createNotificationChannel(this)
     setupAudio()
     setupBackPressHandler()
