@@ -492,6 +492,7 @@ class PlayerActivity :
         if (playerPreferences.savePositionOnQuit.get()) {
           runCatching { MPVLib.setPropertyBoolean("pause", true) }
         }
+        StreamTuning.applyTuningForUri(playableUri)
         player.playFile(playableUri)
       }
     } else if (isAlreadyPlayingCurrent) {
@@ -1195,7 +1196,7 @@ class PlayerActivity :
   private fun setIntentExtras(extras: Bundle?) {
     if (extras == null) return
 
-    extras.getInt("position", POSITION_NOT_SET).takeIf { it != POSITION_NOT_SET }?.let {
+    extras.getInt("position", POSITION_NOT_SET).takeIf { extras.containsKey("position") && it >= 0 }?.let {
       intentPositionMs = it
       MPVLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
     }
@@ -1213,15 +1214,13 @@ class PlayerActivity :
    * @param intent The incoming intent
    */
   private fun logIntentExtras(source: String, intent: Intent) {
-    Log.d(TAG, "$source intent: action=${intent.action} type=${intent.type} data=${intent.data}")
+    Log.d(TAG, "$source intent: action=${intent.action} type=${intent.type} scheme=${intent.data?.scheme} host=${intent.data?.host}")
     val extras = intent.extras
     if (extras == null) {
       Log.d(TAG, "$source intent: no extras")
       return
     }
-    for (key in extras.keySet()) {
-      Log.d(TAG, "$source intent extra[$key] = ${extras.get(key)}")
-    }
+    Log.d(TAG, "$source intent extra keys: ${extras.keySet().sorted().joinToString()}")
   }
 
   /**
@@ -1325,10 +1324,11 @@ class PlayerActivity :
   }
 
   private fun isStremioHandoff(intent: Intent): Boolean {
-    intent.data?.toString()?.let { uri ->
-      if (StreamTuning.isStremioTorrentUri(uri)) return true
-    }
-    return intent.extras?.containsKey("headers") == true
+    val uri = intent.data?.toString() ?: return false
+    if (!StreamTuning.isNetworkUri(uri)) return false
+    if (StreamTuning.isStremioTorrentUri(uri)) return true
+    return intent.getBooleanExtra("return_result", false) &&
+      (intent.hasExtra("position") || intent.hasExtra("startfrom"))
   }
 
   /**
@@ -1399,7 +1399,7 @@ class PlayerActivity :
         .joinToString(",")
 
       safeSetPropertyString("http-header-fields", headersString)
-      Log.d(TAG, "Set HTTP headers: $headersString")
+      Log.d(TAG, "Set ${headerMap.size} HTTP header field(s)")
     } else {
       safeSetPropertyString("http-header-fields", "")
       Log.d(TAG, "Cleared HTTP headers")
@@ -2026,6 +2026,7 @@ class PlayerActivity :
     lifecycleScope.launch(Dispatchers.IO) {
       // Load playback state (will skip track restoration if preferred language configured)
       val hasState = loadVideoPlaybackState(fileName)
+      intentPositionMs = POSITION_NOT_SET
 
       // Re-enable the video/album-art track when loading a file in the foreground.
       // onNewIntent loads new files with vid="no"; if we're not in background
@@ -2659,6 +2660,8 @@ class PlayerActivity :
     if (isReady && (incomingUri == null || (isSameMedia && !isInBackgroundPlayback && !isManualBackgroundPlayback))) {
       Log.d(TAG, "onNewIntent: current media already playing or expanding active session, restoring player without reload")
       enableVideoAfterBackground()
+      if (incomingUri != null) setIntentExtras(intent.extras)
+      pendingIntentExtras = false
       @Suppress("DEPRECATION")
       overridePendingTransition(android.R.anim.fade_in, 0)
       return
@@ -4121,7 +4124,7 @@ class PlayerActivity :
     /**
      * Constant used when playback position is not set.
      */
-    private const val POSITION_NOT_SET = 0
+    private const val POSITION_NOT_SET = -1
 
     /**
      * Maximum volume for MPV in percent.

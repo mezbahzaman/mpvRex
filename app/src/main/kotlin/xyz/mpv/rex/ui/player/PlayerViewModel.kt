@@ -352,6 +352,8 @@ class PlayerViewModel(
   // Auto-subtitles for Stremio handoffs
   private var stremioHandoff = false
   private var lastAutoSubPath: String? = null
+  private var lastAutoSubAttemptMs = 0L
+  private val autoSubRetryIntervalMs = 30_000L
 
   // External subtitle tracking
   val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
@@ -2326,7 +2328,10 @@ class PlayerViewModel(
 
   fun markStremioHandoff(value: Boolean) {
     stremioHandoff = value
-    if (value) lastAutoSubPath = null
+    if (value && runCatching { MPVLib.getPropertyString("path") }.getOrNull() != lastAutoSubPath) {
+      lastAutoSubPath = null
+      lastAutoSubAttemptMs = 0L
+    }
   }
 
   /**
@@ -2341,7 +2346,8 @@ class PlayerViewModel(
     if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
 
     val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
-    if (path.isNullOrBlank() || path == lastAutoSubPath) return
+    if (path.isNullOrBlank()) return
+    if (path == lastAutoSubPath && SystemClock.elapsedRealtime() - lastAutoSubAttemptMs < autoSubRetryIntervalMs) return
     if (!StreamTuning.isNetworkUri(path)) return
 
     // Wait until the demuxer has populated the track list so that embedded-sub
@@ -2349,25 +2355,24 @@ class PlayerViewModel(
     val trackCount = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
     if (trackCount <= 0) return
 
-    if (hasEmbeddedSubtitleTracks()) {
+    if (hasSubtitleTracks()) {
       lastAutoSubPath = path
-      Log.d(TAG, "AutoSub: embedded subtitles present, skipping online search")
+      lastAutoSubAttemptMs = Long.MAX_VALUE
+      Log.d(TAG, "AutoSub: subtitle track present, skipping online search")
       return
     }
 
     lastAutoSubPath = path
+    lastAutoSubAttemptMs = SystemClock.elapsedRealtime()
     Log.d(TAG, "AutoSub: no embedded subtitles, searching online for '$path'")
     autoSearchAndAttach(path)
   }
 
-  private fun hasEmbeddedSubtitleTracks(): Boolean {
+  private fun hasSubtitleTracks(): Boolean {
     val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
     for (i in 0 until count) {
       val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
-      if (type == "sub") {
-        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
-        if (external != true) return true
-      }
+      if (type == "sub") return true
     }
     return false
   }
@@ -2389,13 +2394,13 @@ class PlayerViewModel(
   }
 
   private fun extractReleaseNamesFromQuery(url: String): List<String> {
-    val query = runCatching { Uri.parse(url).query }.getOrNull() ?: return emptyList()
+    val query = runCatching { Uri.parse(url).encodedQuery }.getOrNull() ?: return emptyList()
     val names = mutableListOf<String>()
     for (pair in query.split("&")) {
       val eq = pair.indexOf('=')
       if (eq <= 0) continue
       val value = pair.substring(eq + 1)
-      val decoded = runCatching { URLDecoder.decode(value, "UTF-8") }.getOrNull() ?: continue
+      val decoded = runCatching { Uri.decode(value) }.getOrNull() ?: continue
       if (decoded.startsWith("http://") || decoded.startsWith("https://")) continue
       if (looksLikeReleaseFilename(decoded)) names += decoded
     }
@@ -2446,6 +2451,7 @@ class PlayerViewModel(
   }
 
   private suspend fun autoSearchAndAttach(path: String) {
+    val mediaTitle = currentMediaTitle
     val candidates = autoSubSearchCandidates(path)
     if (candidates.isEmpty()) {
       Log.d(TAG, "AutoSub: no usable title metadata found")
@@ -2468,7 +2474,8 @@ class PlayerViewModel(
       }
 
       Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
-      val uri = wyzieRepository.download(best, currentMediaTitle.ifBlank { candidate.query }).getOrElse {
+      if (runCatching { MPVLib.getPropertyString("path") }.getOrNull() != path) return
+      val uri = wyzieRepository.download(best, mediaTitle.ifBlank { candidate.query }).getOrElse {
         Log.e(TAG, "AutoSub: subtitle download failed", it)
         return
       }
@@ -2477,7 +2484,7 @@ class PlayerViewModel(
         Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
         return
       }
-      _subtitleManager.addSubtitle(uri, select = true, silent = false)
+      _subtitleManager.addSubtitle(uri, select = true, silent = false, expectedMediaPath = path)
       return
     }
     Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")
@@ -2487,6 +2494,14 @@ class PlayerViewModel(
     val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
     if (path != lastStatsPath) {
       lastStatsPath = path
+      lastTorrentStats = null
+      activeInfoHash = null
+      firstTorrentAttempt = 0L
+      lastKnownSeeds = 0
+      swarmSeeds = null
+      lastSwarmPollMs = 0L
+      swarmPollInFlight = false
+      streamStatsPanelVisible.value = false
       _streamInfoDismissed.value = false
       _streamInfoAutoConsumed.value = false
       lastVideoPlaying = false
@@ -2527,7 +2542,7 @@ class PlayerViewModel(
       torrentStats = statsUrl?.let {
         withContext(Dispatchers.IO) { StreamStatsFetcher.fetchTorrentStats(it) }
       }
-      if (torrentStats != null) {
+      if (torrentStats != null && runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
         lastTorrentStats = torrentStats
         if (torrentStats.hasWireData) {
           lastKnownSeeds = torrentStats.seeds
@@ -2550,7 +2565,7 @@ class PlayerViewModel(
 
     // Grace period: if the stats endpoint never responds (e.g. a false-positive
     // hash detection on a plain HTTP stream), degrade to the HTTP-only view.
-    val stats = torrentStats ?: lastTorrentStats
+    val stats = if (infoHash != null) torrentStats ?: lastTorrentStats else null
     val elapsed =
       if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
     val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
@@ -2558,8 +2573,8 @@ class PlayerViewModel(
     val speedBytesPerSec = if (!isTorrent && (paused || demuxerCacheIdle || eofReached)) {
       0L
     } else {
-      stats?.downloadSpeed?.takeIf { it > 0 }
-        ?: (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
+      if (stats != null) stats.downloadSpeed.coerceAtLeast(0)
+      else (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
     }
 
     // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
@@ -2633,10 +2648,16 @@ class PlayerViewModel(
     if (now - lastSwarmPollMs < swarmPollIntervalMs) return
     lastSwarmPollMs = now
     swarmPollInFlight = true
+    val expectedPath = lastStatsPath
     viewModelScope.launch {
       try {
-        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchSwarmSeeds(infoHash, stats.trackerUrls) }
-          ?.let { swarmSeeds = it }
+        val result = withContext(Dispatchers.IO) {
+          StreamStatsFetcher.fetchSwarmSeeds(infoHash, stats.trackerUrls)
+        }
+        if (activeInfoHash == infoHash && lastStatsPath == expectedPath &&
+          runCatching { MPVLib.getPropertyString("path") }.getOrNull() == expectedPath) {
+          result?.let { swarmSeeds = it }
+        }
       } finally {
         swarmPollInFlight = false
       }

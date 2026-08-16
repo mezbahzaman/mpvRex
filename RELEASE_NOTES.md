@@ -7,6 +7,11 @@ the original app. If you don't use Stremio, we recommend the original mpvRex.
 
 ## What's new in this build
 
+### Stability hardening
+Playback state, stream statistics, and subtitle jobs are now reset and validated
+per media path, preventing stale HTTP/P2P data or subtitle work from crossing
+between streams. Release builds also fail closed when upstream cannot be fetched.
+
 ### Accurate idle stream speed
 The HTTP stream overlay now reports `0 KB/s` when playback is paused, fully
 buffered, or complete instead of displaying a stale nonzero cache-speed value.

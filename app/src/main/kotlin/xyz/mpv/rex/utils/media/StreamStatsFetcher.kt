@@ -53,7 +53,9 @@ object StreamStatsFetcher {
   fun buildStatsUrl(streamUrl: String, infoHash: String): String? {
     val base = runCatching {
       val uri = Uri.parse(streamUrl)
-      "${uri.scheme}://${uri.host}:${uri.port}"
+      val scheme = uri.scheme ?: return null
+      val host = uri.host ?: return null
+      "$scheme://$host${if (uri.port >= 0) ":${uri.port}" else ""}"
     }.getOrNull() ?: return null
     return "$base/$infoHash/stats.json"
   }

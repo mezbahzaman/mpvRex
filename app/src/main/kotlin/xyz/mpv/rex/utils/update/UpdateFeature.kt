@@ -131,13 +131,16 @@ class UpdateManager(
     }
 
     private fun isNewerVersion(remote: String, current: String): Boolean {
-        // Tolerate suffixes like "-stable" or "-dev" on any component
-        // (e.g. "4.5.1-stable" -> [4, 5, 1]).
-        fun normalize(version: String): List<Int> =
-            version.split(".").map { it.substringBefore("-").trim().toIntOrNull() ?: 0 }
+        fun normalize(version: String): List<Int>? {
+            val normalized = version.trim().removePrefix("v")
+            val match = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)(?:-(?:stable|dev))?$").matchEntire(normalized)
+                ?: return null
+            return match.groupValues.drop(1).mapNotNull { it.toIntOrNull() }
+                .takeIf { it.size == 3 }
+        }
 
-        val rParts = normalize(remote)
-        val cParts = normalize(current)
+        val rParts = normalize(remote) ?: return false
+        val cParts = normalize(current) ?: return false
 
         for (i in 0 until maxOf(rParts.size, cParts.size)) {
             val r = rParts.getOrElse(i) { 0 }

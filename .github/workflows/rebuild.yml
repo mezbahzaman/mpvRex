@@ -10,6 +10,10 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: patched-stable-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -26,9 +30,10 @@ jobs:
       - name: Find latest upstream master
         id: base
         run: |
+          set -euo pipefail
           git remote add upstream https://github.com/sfsakhawat999/mpvRex
-          timeout 300 git fetch upstream master 2>/dev/null || echo "fetch failed - continuing"
-          BASE=$(git rev-parse upstream/master 2>/dev/null || git rev-parse HEAD)
+          timeout 300 git fetch upstream master
+          BASE=$(git rev-parse upstream/master)
           PATCH=$(git rev-parse HEAD)
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "patch=$PATCH" >> "$GITHUB_OUTPUT"
@@ -41,7 +46,8 @@ jobs:
           PATCH: ${{ steps.base.outputs.patch }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          REL=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body' 2>/dev/null || true)
+          set -euo pipefail
+          REL=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body')
           if echo "$REL" | grep -q "Upstream: $BASE" && echo "$REL" | grep -q "Patch: $PATCH"; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Release already built from upstream $BASE at patch $PATCH - nothing to do."
@@ -73,7 +79,6 @@ jobs:
           git config user.email patcher@local
           git add -A
           git commit -m "Apply Stremio stable patch on $BASE" || true
-          git push -f origin patched
 
       - name: Setup JDK
         if: steps.existing.outputs.skip != 'true'
@@ -89,8 +94,9 @@ jobs:
       - name: Install SDK components
         if: steps.existing.outputs.skip != 'true'
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          yes | sdkmanager "platforms;android-36" "build-tools;36.0.0" >/dev/null || true
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          yes | sdkmanager "platforms;android-36" "build-tools;36.0.0" >/dev/null
 
       - name: Setup Gradle cache
         if: steps.existing.outputs.skip != 'true'
@@ -113,6 +119,7 @@ jobs:
             -PreleaseKeyStorePassword="$KEYSTORE_PASSWORD" \
             -PreleaseKeyAlias=mpvrex \
             -PreleaseKeyPassword="$KEY_PASSWORD"
+          git push -f origin patched
 
       - name: Publish release
         if: steps.existing.outputs.skip != 'true'
@@ -120,15 +127,18 @@ jobs:
           BASE: ${{ steps.base.outputs.base }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           VER=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           BASEVER=$(echo "$VER" | sed 's/-stable$//')
           PATCH=$(git rev-parse HEAD)
           cp "app/build/outputs/apk/release/app-arm64-v8a-release.apk" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk"
-          if gh release view "v${VER}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release delete "v${VER}" --repo "${{ github.repository }}" --yes --cleanup-tag
-          fi
+          test -n "$VER"
+          printf '%s\n' "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-stable$'
+          test -f "mpvRex-${BASEVER}-arm64-v8a-stremio.apk"
+          sha256sum "mpvRex-${BASEVER}-arm64-v8a-stremio.apk" > "mpvRex-${BASEVER}-arm64-v8a-stremio.apk.sha256"
           { cat RELEASE_NOTES.md; echo ""; echo "Upstream: $BASE"; echo "Patch: $PATCH"; } > /tmp/notes.md
           gh release create "v${VER}" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk" \
+            "mpvRex-${BASEVER}-arm64-v8a-stremio.apk.sha256" \
             --repo "${{ github.repository }}" \
             --title "mpvRex-Stable $VER (patched)" \
             --notes-file /tmp/notes.md

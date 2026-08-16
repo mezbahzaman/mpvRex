@@ -25,8 +25,10 @@ object StreamTuning {
 
   fun isStremioTorrentUri(uri: String): Boolean {
     if (!isNetworkUri(uri)) return false
-    val host = runCatching { Uri.parse(uri).host }.getOrNull()?.lowercase()
-    return host in LOCAL_PROXY_HOSTS
+    val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return false
+    val host = parsed.host?.lowercase()
+    if (host !in LOCAL_PROXY_HOSTS) return false
+    return parsed.port == 11470 || parsed.pathSegments.firstOrNull()?.matches(Regex("[0-9a-fA-F]{40}")) == true
   }
 
   fun applyTuningForUri(uri: String?) {
