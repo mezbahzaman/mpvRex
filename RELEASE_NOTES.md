@@ -47,6 +47,10 @@ settings → Wyzie API key).
 Patched builds are published through this repository. The app automatically
 checks for and installs the latest compatible build.
 
+### Fixed: update detection
+Version comparison now ignores build suffixes, so newer patched releases are
+correctly detected even when they share the same major.minor prefix.
+
 ## Releases
 
 Get the latest build from the
