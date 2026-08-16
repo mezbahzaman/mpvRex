@@ -54,6 +54,7 @@ jobs:
           cp patched.patch /tmp/patched.patch
           cp .github/workflows/rebuild.yml /tmp/rebuild.yml
           cp RELEASE_NOTES.md /tmp/RELEASE_NOTES.md
+          cp README.md /tmp/README.md
           git checkout -B patched "$BASE"
           git reset --hard "$BASE"
           git apply --3way /tmp/patched.patch
@@ -64,6 +65,7 @@ jobs:
           cp /tmp/rebuild.yml .github/workflows/rebuild.yml
           cp /tmp/patched.patch patched.patch
           cp /tmp/RELEASE_NOTES.md RELEASE_NOTES.md
+          cp /tmp/README.md README.md
           git config user.name patcher
           git config user.email patcher@local
           git add -A
@@ -116,12 +118,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
-          cp "app/build/outputs/apk/release/app-arm64-v8a-release.apk" "mpvRex-${VER}-arm64-v8a-stremio-sync-patched.apk"
+          BASEVER=$(echo "$VER" | sed 's/-stable$//')
+          cp "app/build/outputs/apk/release/app-arm64-v8a-release.apk" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk"
           if gh release view "v${VER}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release delete "v${VER}" --repo "${{ github.repository }}" --yes --cleanup-tag
           fi
-          { cat RELEASE_NOTES.md; echo ""; echo "Upstream: $BASE"; echo "Auto-built from upstream mpvRex master \`$(echo $BASE | cut -c1-7)\` with the Stremio patch. Auto-updates from this fork (api.github.com/repos/mezbahzaman/mpvRex/releases/latest). Install with: adb install -r (same signature, keeps data)."; } > /tmp/notes.md
-          gh release create "v${VER}" "mpvRex-${VER}-arm64-v8a-stremio-sync-patched.apk" \
+          { cat RELEASE_NOTES.md; echo ""; echo "Upstream: $BASE"; } > /tmp/notes.md
+          gh release create "v${VER}" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk" \
             --repo "${{ github.repository }}" \
             --title "mpvRex-Stable $VER (patched)" \
             --notes-file /tmp/notes.md
