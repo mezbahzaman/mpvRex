@@ -10,9 +10,20 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..ed18076 100644
+index b937ac6..3397b1f 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
+@@ -17,8 +17,8 @@ android {
+     applicationId = "xyz.mpv.rex"
+     minSdk = 26
+     targetSdk = 36
+-    versionCode = 210
+-    versionName = "4.5.0"
++    versionCode = 211
++    versionName = "4.5.1"
+ 
+     vectorDrawables {
+       useSupportLibrary = true
 @@ -40,8 +40,8 @@ android {
      abi {
        isEnable = true
@@ -64,6 +75,18 @@ index 380e440..1e891cb 100644
 +    PlayerButton.STREAM_INFO -> stringResource(R.string.btn_label_stream_info)
      PlayerButton.NONE -> stringResource(R.string.btn_label_none)
    }
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt b/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt
+index df47ea1..e784821 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/preferences/SubtitlesPreferences.kt
+@@ -18,6 +18,7 @@ class SubtitlesPreferences(
+   val preferredLanguages = preferenceStore.getString("sub_preferred_languages")
+   val disableSubtitlesByDefault = preferenceStore.getBoolean("sub_disable_by_default", false)
+   val autoloadMatchingSubtitles = preferenceStore.getBoolean("sub_autoload_enabled", true)
++  val autoStremioSubtitles = preferenceStore.getBoolean("sub_auto_stremio", true)
+ 
+   val fontsFolder = preferenceStore.getString("sub_fonts_folder")
+   val font = preferenceStore.getString("sub_font", "")
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
 index a7a5287..594f7ef 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
@@ -85,10 +108,10 @@ index a7a5287..594f7ef 100644
      runCatching { MPVLib.setPropertyBoolean("pause", false) }
  
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
-index 4125c5b..694714a 100644
+index 03596c2..39fe644 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
-@@ -287,6 +287,7 @@ class MPVView(
+@@ -294,6 +294,7 @@ class MPVView(
        "volume" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
        "hwdec-current" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
        "media-title" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
@@ -97,7 +120,7 @@ index 4125c5b..694714a 100644
        "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
        "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
-index 09ac607..f14e8d2 100644
+index 09ac607..894c0dc 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
 @@ -57,6 +57,7 @@ import xyz.mpv.rex.ui.player.controls.PlayerControls
@@ -116,16 +139,17 @@ index 09ac607..f14e8d2 100644
    private var lastVid = -1 // Track video track for background playback optimization
    private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
    private var inheritedNativeSession = false // MPV ownership came from HeadlessPlaybackController
-@@ -347,6 +349,8 @@ class PlayerActivity :
+@@ -347,6 +349,9 @@ class PlayerActivity :
      setContentView(binding.root)
  
      pendingIntentExtras = true
 +    intentPositionMs = POSITION_NOT_SET
 +    logIntentExtras("onCreate", intent)
++    viewModel.markStremioHandoff(isStremioHandoff(intent))
      // The headless controller may retain MPV idle after its mini player is closed. Always take
      // ownership before initializing so a normal video launch cannot create the global singleton
      // a second time.
-@@ -1189,13 +1193,34 @@ class PlayerActivity :
+@@ -1189,13 +1194,34 @@ class PlayerActivity :
      if (extras == null) return
  
      extras.getInt("position", POSITION_NOT_SET).takeIf { it != POSITION_NOT_SET }?.let {
@@ -160,7 +184,116 @@ index 09ac607..f14e8d2 100644
    /**
     * Adds subtitle tracks from intent extras.
     *
-@@ -1338,12 +1363,15 @@ class PlayerActivity :
+@@ -1206,15 +1232,32 @@ class PlayerActivity :
+    * @param extras Bundle containing subtitle URIs
+    */
+   private fun addSubtitlesFromExtras(extras: Bundle) {
+-    if (!extras.containsKey("subs")) return
++    val subUris = mutableListOf<Pair<Uri, Boolean>>()
+ 
+-    val subList = Utils.getParcelableArray<Uri>(extras, "subs")
+-    val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
++    if (extras.containsKey("subs")) {
++      val subList = Utils.getParcelableArray<Uri>(extras, "subs")
++      val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
++      for (suburi in subList) {
++        subUris.add(suburi to subsToEnable.any { it == suburi })
++      }
++    }
++
++    val stremioSubUris = parseStremioSubtitleExtras(extras)
++    if (stremioSubUris.isNotEmpty()) {
++      // Only auto-select Stremio-provided subtitles when the file has no embedded subs,
++      // otherwise the embedded ones would be silently replaced by an inferior download.
++      val select = !hasEmbeddedSubtitles()
++      for (subUrl in stremioSubUris) {
++        subUris.add(Uri.parse(subUrl) to select)
++      }
++    }
++
++    if (subUris.isEmpty()) return
+ 
+     lifecycleScope.launch(Dispatchers.Default) {
+-      for (suburi in subList) {
++      for ((suburi, selectFlag) in subUris) {
+         val subfile = suburi.resolveUri(this@PlayerActivity) ?: continue
+-        val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
++        val flag = if (selectFlag) "select" else "auto"
+ 
+         Log.v(TAG, "Adding subtitles from intent extras: $subfile")
+         MPVLib.command("sub-add", subfile, flag)
+@@ -1222,6 +1265,70 @@ class PlayerActivity :
+     }
+   }
+ 
++  /**
++   * Parses Stremio subtitle extras that some handoff builds may include.
++   *
++   * Stremio's subtitle support for external players is undocumented, so we accept
++   * several possible shapes defensively: a plain "subtitleUrl" string, a
++   * "subtitles" string containing a plain URL, a single JSON object with a "url"
++   * field, or a JSON array of such objects.
++   */
++  private fun parseStremioSubtitleExtras(extras: Bundle): List<String> {
++    val out = mutableListOf<String>()
++
++    extras.getString("subtitleUrl")?.takeIf { it.isNotBlank() }?.let { out.add(it) }
++
++    val subtitlesJson = extras.getString("subtitles")?.takeIf { it.isNotBlank() }
++    if (subtitlesJson != null) {
++      val trimmed = subtitlesJson.trim()
++      when {
++        trimmed.startsWith("[") -> {
++          try {
++            val arr = org.json.JSONArray(trimmed)
++            for (i in 0 until arr.length()) {
++              val obj = arr.optJSONObject(i)
++              val url = obj?.optString("url")?.takeIf { it.isNotBlank() }
++              if (url != null) out.add(url)
++            }
++          } catch (e: Exception) {
++            Log.w(TAG, "Failed to parse subtitles JSON: $subtitlesJson", e)
++          }
++        }
++        trimmed.startsWith("{") -> {
++          try {
++            val obj = org.json.JSONObject(trimmed)
++            val url = obj.optString("url").takeIf { it.isNotBlank() }
++            if (url != null) out.add(url)
++          } catch (e: Exception) {
++            Log.w(TAG, "Failed to parse subtitle JSON: $subtitlesJson", e)
++          }
++        }
++        else -> out.add(subtitlesJson)
++      }
++    }
++
++    return out
++  }
++
++  private fun hasEmbeddedSubtitles(): Boolean {
++    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
++    for (i in 0 until count) {
++      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
++      if (type == "sub") {
++        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
++        if (external != true) return true
++      }
++    }
++    return false
++  }
++
++  private fun isStremioHandoff(intent: Intent): Boolean {
++    intent.data?.toString()?.let { uri ->
++      if (StreamTuning.isStremioTorrentUri(uri)) return true
++    }
++    return intent.extras?.containsKey("headers") == true
++  }
++
+   /**
+    * Sets HTTP headers from intent extras for network playback.
+    *
+@@ -1338,12 +1445,15 @@ class PlayerActivity :
     * @param intent The intent containing the file URI
     * @return The resolved file path, or null if not found
     */
@@ -178,7 +311,7 @@ index 09ac607..f14e8d2 100644
  
    /**
     * Parses the file path from a SEND intent.
-@@ -1559,6 +1587,18 @@ class PlayerActivity :
+@@ -1559,6 +1669,18 @@ class PlayerActivity :
        return
      }
  
@@ -197,7 +330,7 @@ index 09ac607..f14e8d2 100644
      // 3. Fallback: try saved orientation from DB or metadata cache asynchronously
      val targetFileName = getFileName(targetIntent).ifBlank { targetIntent.data?.lastPathSegment ?: "Unknown Video" }
      lifecycleScope.launch(Dispatchers.IO) {
-@@ -2394,7 +2434,9 @@ class PlayerActivity :
+@@ -2394,7 +2516,9 @@ class PlayerActivity :
    private suspend fun applyPlaybackState(state: PlaybackStateEntity?) {
      if (state == null) {
        // Force reset position for new items in playlist
@@ -208,7 +341,7 @@ index 09ac607..f14e8d2 100644
        return
      }
  
-@@ -2458,10 +2500,14 @@ class PlayerActivity :
+@@ -2458,10 +2582,14 @@ class PlayerActivity :
      MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
      viewModel.setVideoZoom(state.videoZoom)
  
@@ -226,16 +359,17 @@ index 09ac607..f14e8d2 100644
      }
    }
  
-@@ -2511,6 +2557,8 @@ class PlayerActivity :
+@@ -2511,6 +2639,9 @@ class PlayerActivity :
      super.onNewIntent(intent)
  
      pendingIntentExtras = true
 +    intentPositionMs = POSITION_NOT_SET
 +    logIntentExtras("onNewIntent", intent)
++    viewModel.markStremioHandoff(isStremioHandoff(intent))
      // Update the intent first so getFileName uses the new intent data
      setIntent(intent)
  
-@@ -2645,6 +2693,7 @@ class PlayerActivity :
+@@ -2645,6 +2776,7 @@ class PlayerActivity :
          }
          // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
          lifecycleScope.launch(Dispatchers.Default) {
@@ -243,7 +377,7 @@ index 09ac607..f14e8d2 100644
            MPVLib.command("loadfile", uriStr)
          }
        }
-@@ -3653,6 +3702,7 @@ class PlayerActivity :
+@@ -3653,6 +3785,7 @@ class PlayerActivity :
      // Load the new video
      // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
      lifecycleScope.launch(Dispatchers.Default) {
@@ -251,7 +385,7 @@ index 09ac607..f14e8d2 100644
        MPVLib.command("loadfile", playableUri)
      }
  
-@@ -3844,6 +3894,7 @@ class PlayerActivity :
+@@ -3844,6 +3977,7 @@ class PlayerActivity :
            }
            if (mpvInitialized) {
              lifecycleScope.launch(Dispatchers.Default) {
@@ -260,7 +394,7 @@ index 09ac607..f14e8d2 100644
              }
            } else {
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index 475e5f1..1be83c2 100644
+index feecc99..61c8066 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 @@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
@@ -271,10 +405,11 @@ index 475e5f1..1be83c2 100644
  import android.provider.Settings
  import android.util.DisplayMetrics
  import android.util.Log
-@@ -24,6 +25,10 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
+@@ -25,6 +26,11 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
  import xyz.mpv.rex.repository.wyzie.WyzieSubtitle
  import xyz.mpv.rex.utils.media.ChecksumUtils
  import xyz.mpv.rex.utils.media.MediaInfoParser
++import java.net.URLDecoder
 +import xyz.mpv.rex.utils.media.StreamStats
 +import xyz.mpv.rex.utils.media.StreamStatsFetcher
 +import xyz.mpv.rex.utils.media.StreamTuning
@@ -282,7 +417,7 @@ index 475e5f1..1be83c2 100644
  import `is`.xyz.mpv.MPVLib
  import kotlinx.collections.immutable.persistentListOf
  import kotlinx.collections.immutable.toImmutableList
-@@ -251,6 +256,33 @@ class PlayerViewModel(
+@@ -253,6 +259,33 @@ class PlayerViewModel(
    val isVolumeSliderShown = MutableStateFlow(false)
    val volumeSliderTimestamp = MutableStateFlow(0L)
    val brightnessSliderTimestamp = MutableStateFlow(0L)
@@ -316,7 +451,18 @@ index 475e5f1..1be83c2 100644
    val currentBrightness =
      MutableStateFlow(
        runCatching {
-@@ -439,6 +471,14 @@ class PlayerViewModel(
+@@ -316,6 +349,10 @@ class PlayerViewModel(
+   var currentMediaTitle: String = ""
+   private var lastAutoSelectedMediaTitle: String? = null
+ 
++  // Auto-subtitles for Stremio handoffs
++  private var stremioHandoff = false
++  private var lastAutoSubPath: String? = null
++
+   // External subtitle tracking
+   val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
+ 
+@@ -441,6 +478,22 @@ class PlayerViewModel(
        }
      }
  
@@ -328,11 +474,19 @@ index 475e5f1..1be83c2 100644
 +      }
 +    }
 +
++    // Auto-download subtitles for Stremio handoffs that have no embedded subs
++    viewModelScope.launch {
++      while (isActive) {
++        maybeAutoLoadStremioSubtitles()
++        delay(1000)
++      }
++    }
++
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2212,10 +2252,195 @@ class PlayerViewModel(
-     playerUpdate.value = PlayerUpdates.ShowText(if (newState) "V-Flip On" else "V-Flip Off")
+@@ -2235,10 +2288,278 @@ class PlayerViewModel(
+     }
    }
  
 +  // ==================== Stream Info (Stremio P2P / HTTP stats) ====================
@@ -369,6 +523,89 @@ index 475e5f1..1be83c2 100644
 +  fun dismissStreamInfo() {
 +    streamStatsPanelVisible.value = false
 +    _streamInfoDismissed.value = true
++  }
++
++  fun markStremioHandoff(value: Boolean) {
++    stremioHandoff = value
++    if (value) lastAutoSubPath = null
++  }
++
++  /**
++   * Checks once per second whether the currently playing Stremio stream needs
++   * an online subtitle. Runs only for network streams handed off by Stremio,
++   * skips files that already have embedded subtitle tracks, and never retries
++   * the same path after a decision has been made.
++   */
++  private suspend fun maybeAutoLoadStremioSubtitles() {
++    if (!stremioHandoff) return
++    if (!subtitlesPreferences.autoStremioSubtitles.get()) return
++    if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
++
++    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
++    if (path.isNullOrBlank() || path == lastAutoSubPath) return
++    if (!StreamTuning.isNetworkUri(path)) return
++
++    // Wait until the demuxer has populated the track list so that embedded-sub
++    // detection is accurate (tracks arrive slightly after playback starts).
++    val trackCount = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
++    if (trackCount <= 0) return
++
++    if (hasEmbeddedSubtitleTracks()) {
++      lastAutoSubPath = path
++      Log.d(TAG, "AutoSub: embedded subtitles present, skipping online search")
++      return
++    }
++
++    lastAutoSubPath = path
++    Log.d(TAG, "AutoSub: no embedded subtitles, searching online for '$path'")
++    autoSearchAndAttach(path)
++  }
++
++  private fun hasEmbeddedSubtitleTracks(): Boolean {
++    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
++    for (i in 0 until count) {
++      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
++      if (type == "sub") {
++        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
++        if (external != true) return true
++      }
++    }
++    return false
++  }
++
++  private suspend fun autoSearchAndAttach(path: String) {
++    val fileName = path.substringAfterLast('/').substringBefore('?')
++      .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
++    val titleInfo = MediaInfoParser.parse(currentMediaTitle)
++    val fileInfo = MediaInfoParser.parse(fileName)
++    val query = titleInfo.title.ifBlank { fileInfo.title }
++      .ifBlank { currentMediaTitle }.ifBlank { fileName }
++    if (query.isBlank()) return
++    val season = titleInfo.season ?: fileInfo.season
++    val episode = titleInfo.episode ?: fileInfo.episode
++    val year = titleInfo.year ?: fileInfo.year
++    Log.d(TAG, "AutoSub: query='$query' season=$season episode=$episode year=$year")
++
++    wyzieRepository.search(query, season, episode, year)
++      .onSuccess { results ->
++        val best = results.firstOrNull()
++        if (best == null) {
++          Log.d(TAG, "AutoSub: no subtitles found for '$query'")
++          return@onSuccess
++        }
++        Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
++        wyzieRepository.download(best, currentMediaTitle.ifBlank { query })
++          .onSuccess { uri ->
++            val currentPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
++            if (currentPath != path) {
++              Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
++              return@onSuccess
++            }
++            _subtitleManager.addSubtitle(uri, select = true, silent = false)
++          }
++          .onFailure { Log.e(TAG, "AutoSub: subtitle download failed", it) }
++      }
++      .onFailure { Log.e(TAG, "AutoSub: subtitle search failed", it) }
 +  }
 +
 +  private suspend fun updateStreamStats() {
@@ -837,6 +1074,32 @@ index 1c39a0b..34ae325 100644
      PlayerButton.NONE -> { /* Do nothing */
      }
    }
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
+index 8284ff2..fee01b4 100644
+--- a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
+@@ -261,6 +261,21 @@ object SubtitlesPreferencesScreen : Screen {
+ 
+               PreferenceDivider()
+ 
++              val autoStremio by preferences.autoStremioSubtitles.collectAsState()
++              SwitchPreference(
++                value = autoStremio,
++                onValueChange = { preferences.autoStremioSubtitles.set(it) },
++                title = { Text(stringResource(R.string.pref_subtitles_auto_stremio_title)) },
++                summary = {
++                  Text(
++                    stringResource(R.string.pref_subtitles_auto_stremio_summary),
++                    color = MaterialTheme.colorScheme.outline,
++                  )
++                },
++              )
++
++              PreferenceDivider()
++
+               val overrideAss by preferences.overrideAssSubs.collectAsState()
+               SwitchPreference(
+                 value = overrideAss,
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
 new file mode 100644
 index 0000000..378067b
@@ -1116,7 +1379,7 @@ index b99862e..e5ac3a5 100644
          val remoteVersion = release.tagName.removePrefix("v")
          val prefs = context.getSharedPreferences("mpvEx_prefs", Context.MODE_PRIVATE)
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 243e0b7..65782ff 100644
+index 243e0b7..b9fe28f 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -182,6 +182,11 @@
@@ -1131,7 +1394,16 @@ index 243e0b7..65782ff 100644
      <string name="pref_player_remember_brightness">Remember display brightness</string>
  
      <string name="pref_player_gestures">Gestures</string>
-@@ -1025,6 +1030,7 @@
+@@ -280,6 +285,8 @@
+     <string name="pref_subtitles_disable_by_default_summary">Subtitles will not appear unless you manually enable them during playback.</string>
+     <string name="pref_subtitles_autoload_title">Automatically load subtitles</string>
+     <string name="pref_subtitles_autoload_summary">Automatically load external subtitles with the same name.</string>
++    <string name="pref_subtitles_auto_stremio_title">Auto-download subtitles for Stremio streams</string>
++    <string name="pref_subtitles_auto_stremio_summary">When a Stremio stream has no embedded subtitles, automatically search for and load the best-matching subtitle.</string>
+     <string name="pref_subtitles_open_at_video_location_title">Open at video location</string>
+     <string name="pref_subtitles_open_at_video_location_summary">Open file picker in the same folder as the current video</string>
+     <string name="pref_subtitles_custom_picker_folder_title">Default selection folder</string>
+@@ -1025,6 +1032,7 @@
      <string name="btn_label_background_playback">Background Playback</string>
      <string name="btn_label_ambient_mode">Ambience Mode</string>
      <string name="btn_label_sleep_timer">Sleep Timer</string>
