@@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
 import xyz.mpv.rex.R
 import xyz.mpv.rex.preferences.AppearancePreferences
 import xyz.mpv.rex.preferences.AudioPreferences
+import xyz.mpv.rex.utils.media.StreamStats
+import xyz.mpv.rex.utils.media.StreamStatsFetcher
 import xyz.mpv.rex.preferences.GesturePreferences
 import xyz.mpv.rex.preferences.PlayerPreferences
 import xyz.mpv.rex.preferences.preference.collectAsState
@@ -142,6 +144,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import org.koin.compose.koinInject
 import kotlin.math.abs
+
+// Schemes that indicate a network stream. The buffered-content indicator on the
+// seekbar is only meaningful for these; local files always read ahead fully, so
+// showing a buffer there just fills the whole bar with misleading information.
+private val NETWORK_STREAM_SCHEMES =
+  setOf("http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "mms", "mmsh", "ftp", "ftps")
 
 @Suppress("CompositionLocalAllowlist")
 val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
@@ -192,9 +200,22 @@ fun PlayerControls(
   val position by MPVLib.propInt["time-pos"].collectAsState()
   val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
   val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
+  val mediaPath by MPVLib.propString["path"].collectAsState()
   val precisePosition by viewModel.precisePosition.collectAsState()
   val preciseDuration by viewModel.preciseDuration.collectAsState()
   val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
+  val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
+  val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
+  val streamStats by viewModel.streamStats.collectAsState()
+  val streamStatsPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
+  val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
+  val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
+
+  val streamInfoAutoVisible =
+    streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
+      (pausedForCache == true || (coreIdle == true && eofReached != true))
+  val streamInfoVisible =
+    streamStats.isNetwork && (streamStatsPanelVisible || streamInfoAutoVisible)
 
   val doubleTapSeekAmount by viewModel.doubleTapSeekAmount.collectAsState()
   val doubleTapSeekBasePos by viewModel.doubleTapSeekBasePos.collectAsState()
@@ -368,6 +389,7 @@ fun PlayerControls(
         val unlockControlsButton = createRef()
         val (bottomRightControls, bottomLeftControls) = createRefs()
         val playerPauseButton = createRef()
+        val streamInfoOverlay = createRef()
         val seekbar = createRef()
         val (playerUpdates, playerLockHint) = createRefs()
         val (customLeftButtonsRef, customRightButtonsRef) = createRefs()
@@ -970,9 +992,22 @@ fun PlayerControls(
 
           when {
             pausedForCache == true && showLoadingCircle -> {
-              LoadingIndicator(
-                modifier = Modifier.size(96.dp),
-              )
+              Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+              ) {
+                LoadingIndicator(
+                  modifier = Modifier.size(96.dp),
+                )
+                val bufferingPercent = cacheBufferingState
+                if (bufferingPercent != null && bufferingPercent in 0..100) {
+                  Text(
+                    text = stringResource(id = R.string.buffering_percent, bufferingPercent),
+                    color = Color.White.copy(alpha = 0.9f),
+                    style = MaterialTheme.typography.titleMedium,
+                  )
+                }
+              }
             }
 
             controlsShown && !areControlsLocked -> {
@@ -1159,6 +1194,22 @@ fun PlayerControls(
         }
 
         AnimatedVisibility(
+          visible = streamInfoVisible,
+          enter = fadeIn(playerControlsEnterAnimationSpec()),
+          exit = fadeOut(playerControlsExitAnimationSpec()),
+          modifier =
+            Modifier.constrainAs(streamInfoOverlay) {
+              start.linkTo(parent.start)
+              end.linkTo(parent.end)
+              top.linkTo(parent.top)
+              bottom.linkTo(parent.bottom)
+              verticalBias = 0.30f
+            },
+        ) {
+          StreamInfoOverlayContent(streamStats = streamStats)
+        }
+
+        AnimatedVisibility(
           visible = (controlsShown || seekBarShown) && !areControlsLocked,
           enter =
             if (!reduceMotion) {
@@ -1217,18 +1268,27 @@ fun PlayerControls(
               val currentPos = position?.toFloat() ?: 0f
               val cacheDuration = demuxerCacheDuration ?: 0f
               val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
-              val isBuffering = cacheBufferingState ?: 0
 
-              // If cache duration is available and valid, use it (up to 60 seconds)
-              if (cacheDuration > 0.1f) {
-                (currentPos + cacheDuration).coerceAtMost(totalDuration)
-              } else if (isBuffering > 0 && isBuffering < 100) {
-                // Show estimated buffer when actively buffering (up to 60 seconds)
-                val estimatedBuffer = (isBuffering / 100f) * 60f
-                (currentPos + estimatedBuffer).coerceAtMost(totalDuration)
+              // Media opened from disk (or a content/file URI) is always read
+              // ahead by the demuxer, so a "buffered" indicator would just fill
+              // the whole bar. Only show it for real network streams.
+              val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
+              val isNetworkMedia = mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
+
+              if (!isNetworkMedia) {
+                // Local file: no buffered-content indicator.
+                currentPos.coerceAtMost(totalDuration)
               } else {
-                // When not actively buffering and cache is full, show 1 minute buffer
-                (currentPos + 60f).coerceAtMost(totalDuration)
+                // Network stream: show the REAL amount buffered by the demuxer
+                // cache, and nothing else. While (re)buffering the cache is
+                // depleted, so there is nothing playable ahead of the current
+                // position yet — hide the indicator instead of fabricating a
+                // fake buffer that looked like progress while the stream stalled.
+                if (cacheDuration > 0.1f) {
+                  (currentPos + cacheDuration).coerceAtMost(totalDuration)
+                } else {
+                  currentPos.coerceAtMost(totalDuration)
+                }
               }
             }
           }
@@ -1887,6 +1947,66 @@ fun PlayerControls(
       panelShown = panel,
       onDismissRequest = { onOpenPanel(Panels.None) },
     )
+  }
+}
+
+@Composable
+private fun StreamInfoOverlayContent(streamStats: StreamStats) {
+  val bufferedSeconds = streamStats.bufferedSeconds.toInt().coerceAtLeast(0)
+  val speedText = StreamStatsFetcher.formatSpeed(streamStats.speedBytesPerSec)
+
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    modifier = Modifier
+      .clip(RoundedCornerShape(12.dp))
+      .background(Color.Black.copy(alpha = 0.55f))
+      .padding(horizontal = 16.dp, vertical = 10.dp),
+  ) {
+    if (streamStats.fetchingMetadata) {
+      CircularProgressIndicator(
+        modifier = Modifier.size(18.dp),
+        color = Color.White.copy(alpha = 0.9f),
+        strokeWidth = 2.dp,
+      )
+      Text(
+        text = stringResource(R.string.stream_stats_fetching_metadata),
+        color = Color.White.copy(alpha = 0.9f),
+        style = MaterialTheme.typography.bodyMedium,
+      )
+    } else {
+      val line =
+        if (streamStats.isTorrent) {
+          val swarmSeeds = streamStats.swarmSeeds
+          if (swarmSeeds != null) {
+            stringResource(
+              R.string.stream_stats_line_swarm,
+              bufferedSeconds,
+              streamStats.seeds,
+              streamStats.peers,
+              speedText,
+              swarmSeeds,
+            )
+          } else {
+            stringResource(
+              R.string.stream_stats_line,
+              bufferedSeconds,
+              streamStats.seeds,
+              streamStats.peers,
+              speedText,
+            )
+          }
+        } else {
+          stringResource(R.string.stream_stats_line_http, bufferedSeconds, speedText)
+        }
+      Text(
+        text = line,
+        color = Color.White.copy(alpha = 0.95f),
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+      )
+    }
   }
 }
 
