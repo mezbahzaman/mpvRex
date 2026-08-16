@@ -10,7 +10,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..2967a47 100644
+index b937ac6..a99d8af 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -19,8 +19,8 @@ index b937ac6..2967a47 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 215
-+    versionName = "4.6.3"
++    versionCode = 216
++    versionName = "4.6.4"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -474,7 +474,7 @@ index 09ac607..94d814d 100644
              }
            } else {
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index feecc99..b665527 100644
+index feecc99..b5dbbc4 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 @@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
@@ -565,7 +565,7 @@ index feecc99..b665527 100644
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2235,10 +2288,354 @@ class PlayerViewModel(
+@@ -2235,10 +2288,364 @@ class PlayerViewModel(
      }
    }
  
@@ -821,6 +821,14 @@ index feecc99..b665527 100644
 +      (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
 +        .toFloat()
 +
++    // mpv can retain the last non-zero cache-speed value while a stream is
++    // paused, fully buffered, or finished. Do not present that stale value as
++    // active network traffic; keep showing downloads during cache recovery.
++    val paused = runCatching { MPVLib.getPropertyBoolean("pause") }.getOrNull() ?: false
++    val eofReached = runCatching { MPVLib.getPropertyBoolean("eof-reached") }.getOrNull() ?: false
++    val demuxerCacheIdle = runCatching { MPVLib.getPropertyBoolean("demuxer-cache-idle") }.getOrNull() ?: false
++    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
++
 +    // Grace period: if the stats endpoint never responds (e.g. a false-positive
 +    // hash detection on a plain HTTP stream), degrade to the HTTP-only view.
 +    val stats = torrentStats ?: lastTorrentStats
@@ -828,12 +836,14 @@ index feecc99..b665527 100644
 +      if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
 +    val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
 +
-+    val speedBytesPerSec =
++    val speedBytesPerSec = if (!isTorrent && (paused || demuxerCacheIdle || eofReached)) {
++      0L
++    } else {
 +      stats?.downloadSpeed?.takeIf { it > 0 }
 +        ?: (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
++    }
 +
 +    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
-+    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
 +    if (pausedForCache && !lastPausedForCache) {
 +      lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
 +      Log.d(
