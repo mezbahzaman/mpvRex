@@ -2372,17 +2372,69 @@ class PlayerViewModel(
     return false
   }
 
+  private val RELEASE_VIDEO_EXTENSIONS =
+    setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts", "m2ts", "3gp")
+
+  private val RELEASE_MARKERS = listOf(
+    "720p", "1080p", "2160p", "4k", "bluray", "web-dl", "webrip", "hdtv",
+    "x264", "x265", "h264", "h265", "aac", "remux", "yify", "s01", "s02", "s03",
+  )
+
+  private fun looksLikeReleaseFilename(value: String): Boolean {
+    val low = value.lowercase()
+    if (RELEASE_VIDEO_EXTENSIONS.any { low.endsWith(it) }) return true
+    val hasYear = Regex("""(?<!\d)(?:19|20)\d{2}(?!\d)""").containsMatchIn(value)
+    val hasMarker = RELEASE_MARKERS.any { low.contains(it) }
+    return hasYear && hasMarker
+  }
+
+  private fun extractReleaseNameFromQuery(url: String): String? {
+    val query = runCatching { Uri.parse(url).query }.getOrNull() ?: return null
+    for (pair in query.split("&")) {
+      val eq = pair.indexOf('=')
+      if (eq <= 0) continue
+      val value = pair.substring(eq + 1)
+      val decoded = runCatching { URLDecoder.decode(value, "UTF-8") }.getOrNull() ?: continue
+      if (decoded.startsWith("http://") || decoded.startsWith("https://")) continue
+      if (looksLikeReleaseFilename(decoded)) return decoded
+    }
+    return null
+  }
+
+  private fun isProxyGenericName(name: String): Boolean {
+    val low = name.lowercase()
+    if (Regex("""^(movie|film|video|stream|file|media|index|download|watch)[.\-_]\d""").containsMatchIn(low)) {
+      return true
+    }
+    return false
+  }
+
   private suspend fun autoSearchAndAttach(path: String) {
-    val fileName = path.substringAfterLast('/').substringBefore('?')
+    val fallbackName = path.substringAfterLast('/').substringBefore('?')
       .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
+    val queryParamName = extractReleaseNameFromQuery(path)
+    if (queryParamName != null) {
+      Log.d(TAG, "AutoSub: release name from query params: '$queryParamName'")
+    }
+
     val titleInfo = MediaInfoParser.parse(currentMediaTitle)
-    val fileInfo = MediaInfoParser.parse(fileName)
-    val query = titleInfo.title.ifBlank { fileInfo.title }
-      .ifBlank { currentMediaTitle }.ifBlank { fileName }
+    val fallbackInfo = MediaInfoParser.parse(fallbackName)
+    val paramInfo = queryParamName?.let { MediaInfoParser.parse(it) }
+
+    // Prefer the most film-like candidate: a real title extra, then a release name found
+    // in the URL query (e.g. a Stremio proxy passes KEY5=Hunter.Killer.2018.1080p...),
+    // then the proxy path basename (which may be a generic id like movie.12147.2018...).
+    val rawName = when {
+      titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle) -> currentMediaTitle
+      paramInfo != null && paramInfo.title.isNotBlank() -> queryParamName!!
+      else -> fallbackName
+    }
+    val fileInfo = MediaInfoParser.parse(rawName)
+    val query = fileInfo.title.ifBlank { rawName }.ifBlank { currentMediaTitle }
     if (query.isBlank()) return
-    val season = titleInfo.season ?: fileInfo.season
-    val episode = titleInfo.episode ?: fileInfo.episode
-    val year = titleInfo.year ?: fileInfo.year
+    val season = titleInfo.season ?: paramInfo?.season ?: fallbackInfo.season
+    val episode = titleInfo.episode ?: paramInfo?.episode ?: fallbackInfo.episode
+    val year = titleInfo.year ?: paramInfo?.year ?: fallbackInfo.year
     Log.d(TAG, "AutoSub: query='$query' season=$season episode=$episode year=$year")
 
     wyzieRepository.search(query, season, episode, year)

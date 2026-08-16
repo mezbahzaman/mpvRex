@@ -55,6 +55,13 @@ correctly detected even when they share the same major.minor prefix.
 The player no longer constructs its ViewModel before the MPV core is ready,
 which could abort playback before it started (local files and Stremio streams).
 
+### Fixed: auto-subtitle search could not identify the movie
+For Stremio streams served through a proxy (e.g. a debrid or cloud addon), the
+movie title was read from a generic proxy path like `movie.12147.2018...`, so the
+subtitle search failed. The player now detects the real release name embedded in
+the stream URL's query parameters (e.g. `KEY5=Hunter.Killer.2018.1080p...`) and
+uses that for the search.
+
 ## Releases
 
 Get the latest build from the
