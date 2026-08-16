@@ -7,6 +7,10 @@ the original app. If you don't use Stremio, we recommend the original mpvRex.
 
 ## What's new in this build
 
+### Accurate idle stream speed
+The HTTP stream overlay now reports `0 KB/s` when playback is paused, fully
+buffered, or complete instead of displaying a stale nonzero cache-speed value.
+
 ### More reliable automatic subtitles
 Automatic Wyzie subtitle loading now recognizes direct files, HLS (`m3u8`), DASH
 (`mpd`), HTTP proxy streams, and P2P handoffs. It tries IMDb IDs and multiple

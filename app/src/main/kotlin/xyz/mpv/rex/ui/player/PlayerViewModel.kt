@@ -2540,6 +2540,14 @@ class PlayerViewModel(
       (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
         .toFloat()
 
+    // mpv can retain the last non-zero cache-speed value while a stream is
+    // paused, fully buffered, or finished. Do not present that stale value as
+    // active network traffic; keep showing downloads during cache recovery.
+    val paused = runCatching { MPVLib.getPropertyBoolean("pause") }.getOrNull() ?: false
+    val eofReached = runCatching { MPVLib.getPropertyBoolean("eof-reached") }.getOrNull() ?: false
+    val demuxerCacheIdle = runCatching { MPVLib.getPropertyBoolean("demuxer-cache-idle") }.getOrNull() ?: false
+    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
+
     // Grace period: if the stats endpoint never responds (e.g. a false-positive
     // hash detection on a plain HTTP stream), degrade to the HTTP-only view.
     val stats = torrentStats ?: lastTorrentStats
@@ -2547,12 +2555,14 @@ class PlayerViewModel(
       if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
     val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
 
-    val speedBytesPerSec =
+    val speedBytesPerSec = if (!isTorrent && (paused || demuxerCacheIdle || eofReached)) {
+      0L
+    } else {
       stats?.downloadSpeed?.takeIf { it > 0 }
         ?: (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
+    }
 
     // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
-    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
     if (pausedForCache && !lastPausedForCache) {
       lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
       Log.d(
