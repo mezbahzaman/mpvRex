@@ -62,7 +62,7 @@ class AppearancePreferences(
   val bottomRightControls =
     preferenceStore.getString(
       "bottom_right_controls",
-      "PICTURE_IN_PICTURE,ASPECT_RATIO",
+      "PICTURE_IN_PICTURE,ASPECT_RATIO,STREAM_INFO",
     )
 
   val bottomLeftControls =

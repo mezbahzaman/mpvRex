@@ -294,6 +294,7 @@ class MPVView(
       "volume" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
       "hwdec-current" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
       "media-title" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
+      "path" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
       "demuxer-cache-duration" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
       "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
       "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
