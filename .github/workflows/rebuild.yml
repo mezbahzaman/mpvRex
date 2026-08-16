@@ -38,7 +38,7 @@ jobs:
           BASE: ${{ steps.base.outputs.base }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          REL=$(gh release list --limit 1 --json body --jq '.[0].body' 2>/dev/null || true)
+          REL=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body' 2>/dev/null || true)
           if echo "$REL" | grep -q "Upstream: $BASE"; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Release already built from upstream $BASE - nothing to do."
