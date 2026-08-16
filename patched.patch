@@ -10,7 +10,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..3397b1f 100644
+index b937ac6..f617122 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -19,8 +19,8 @@ index b937ac6..3397b1f 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 211
-+    versionName = "4.5.1"
++    versionCode = 212
++    versionName = "4.6.0"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -1366,7 +1366,7 @@ index 0000000..8527c3d
 +  }
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt
-index b99862e..e5ac3a5 100644
+index b99862e..b6eb3d0 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/update/UpdateFeature.kt
 @@ -91,7 +91,7 @@ class UpdateManager(
@@ -1378,6 +1378,24 @@ index b99862e..e5ac3a5 100644
          val currentVersion = BuildConfig.VERSION_NAME.replace("-dev", "")
          val remoteVersion = release.tagName.removePrefix("v")
          val prefs = context.getSharedPreferences("mpvEx_prefs", Context.MODE_PRIVATE)
+@@ -131,9 +131,14 @@ class UpdateManager(
+     }
+ 
+     private fun isNewerVersion(remote: String, current: String): Boolean {
+-        val rParts = remote.split(".").map { it.toIntOrNull() ?: 0 }
+-        val cParts = current.split(".").map { it.toIntOrNull() ?: 0 }
+-        
++        // Tolerate suffixes like "-stable" or "-dev" on any component
++        // (e.g. "4.5.1-stable" -> [4, 5, 1]).
++        fun normalize(version: String): List<Int> =
++            version.split(".").map { it.substringBefore("-").trim().toIntOrNull() ?: 0 }
++
++        val rParts = normalize(remote)
++        val cParts = normalize(current)
++
+         for (i in 0 until maxOf(rParts.size, cParts.size)) {
+             val r = rParts.getOrElse(i) { 0 }
+             val c = cParts.getOrElse(i) { 0 }
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
 index 243e0b7..b9fe28f 100644
 --- a/app/src/main/res/values/strings.xml
