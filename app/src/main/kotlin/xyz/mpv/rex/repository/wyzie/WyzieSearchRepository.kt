@@ -236,22 +236,22 @@ class WyzieSearchRepository(
         year: String? = null
     ): Result<List<WyzieSubtitle>> = withContext(Dispatchers.IO) {
         try {
-            var searchId = query
-            if (!query.startsWith("tt", ignoreCase = true) && !query.all { it.isDigit() }) {
+            val searchIds = if (!query.startsWith("tt", ignoreCase = true) && !query.all { it.isDigit() }) {
                 val tmdbResults = tmdbSearch(query)
-                if (tmdbResults.isNotEmpty()) {
-                    // If year is provided, prefer match with matching release year
-                    val result = if (year != null) {
-                        tmdbResults.firstOrNull { it.releaseYear == year }
-                            ?: tmdbResults.firstOrNull { it.releaseYear?.startsWith(year.take(3)) == true }
-                            ?: tmdbResults[0]
-                    } else {
-                        tmdbResults[0]
-                    }
-                    searchId = result.id.toString()
-                } else {
+                if (tmdbResults.isEmpty()) {
                     return@withContext Result.failure(Exception("Could not find media ID for '$query'"))
                 }
+
+                tmdbResults.sortedByDescending { result ->
+                    var score = 0
+                    if (year != null && result.releaseYear == year) score += 100
+                    else if (year != null && result.releaseYear?.startsWith(year.take(3)) == true) score += 50
+                    if (season != null && result.mediaType.equals("tv", ignoreCase = true)) score += 25
+                    if (season == null && result.mediaType.equals("movie", ignoreCase = true)) score += 10
+                    score
+                }.map { it.id.toString() }.distinct().take(5)
+            } else {
+                listOf(query)
             }
 
             val selectedLangsRaw = preferences.subdlLanguages.get()
@@ -270,16 +270,20 @@ class WyzieSearchRepository(
             
             val hearingImpaired = preferences.wyzieHearingImpaired.get()
 
-            val results = fetchSubtitles(
-                id = searchId,
-                season = season,
-                episode = episode,
-                language = languages,
-                format = formatParam,
-                encoding = encodingParam,
-                source = sourceParam,
-                hi = if (hearingImpaired) true else null
-            )
+            var results = emptyList<WyzieSubtitle>()
+            for (searchId in searchIds) {
+                results = fetchSubtitles(
+                    id = searchId,
+                    season = season,
+                    episode = episode,
+                    language = languages,
+                    format = formatParam,
+                    encoding = encodingParam,
+                    source = sourceParam,
+                    hi = if (hearingImpaired) true else null
+                )
+                if (results.isNotEmpty()) break
+            }
             
             val sortedResults = results.sortedWith(compareByDescending<WyzieSubtitle> { sub ->
                 val name = sub.displayName.lowercase()
