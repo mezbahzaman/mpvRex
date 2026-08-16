@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.util.Log
@@ -25,6 +26,10 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
 import xyz.mpv.rex.repository.wyzie.WyzieSubtitle
 import xyz.mpv.rex.utils.media.ChecksumUtils
 import xyz.mpv.rex.utils.media.MediaInfoParser
+import xyz.mpv.rex.utils.media.StreamStats
+import xyz.mpv.rex.utils.media.StreamStatsFetcher
+import xyz.mpv.rex.utils.media.StreamTuning
+import xyz.mpv.rex.utils.media.TorrentStats
 import `is`.xyz.mpv.MPVLib
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
@@ -253,6 +258,33 @@ class PlayerViewModel(
   val isVolumeSliderShown = MutableStateFlow(false)
   val volumeSliderTimestamp = MutableStateFlow(0L)
   val brightnessSliderTimestamp = MutableStateFlow(0L)
+
+  // Live stats for network streams (Stremio HTTP / P2P torrents)
+  private val _streamStats = MutableStateFlow(StreamStats())
+  val streamStats: StateFlow<StreamStats> = _streamStats.asStateFlow()
+
+  /**
+   * Manual toggle for the stream-info overlay ("i" button). The overlay is also
+   * shown automatically while a network stream is still loading/buffering.
+   */
+  val streamStatsPanelVisible = MutableStateFlow(false)
+
+  /**
+   * True once the user explicitly dismissed the auto-shown overlay; suppresses
+   * auto-visible until the stream changes (or the user shows it again manually).
+   */
+  private val _streamInfoDismissed = MutableStateFlow(false)
+  val streamInfoDismissed: StateFlow<Boolean> = _streamInfoDismissed.asStateFlow()
+
+  /**
+   * One-shot latch: set the first time the video actually begins playing
+   * (time-pos > 0 and not paused-for-cache). Once set, the overlay is never
+   * auto-shown again for this playback — only the manual "i" button shows it.
+   * Reset when the stream changes or a new playback session starts.
+   */
+  private val _streamInfoAutoConsumed = MutableStateFlow(false)
+  val streamInfoAutoConsumed: StateFlow<Boolean> = _streamInfoAutoConsumed.asStateFlow()
+
   val currentBrightness =
     MutableStateFlow(
       runCatching {
@@ -438,6 +470,14 @@ class PlayerViewModel(
         }.onFailure { e ->
           Log.e(TAG, "Error setting volume-max: $maxVol", e)
         }
+      }
+    }
+
+    // Poll live stream stats (Stremio P2P / HTTP) every second
+    viewModelScope.launch {
+      while (isActive) {
+        updateStreamStats()
+        delay(1000)
       }
     }
 
@@ -2235,10 +2275,195 @@ class PlayerViewModel(
     }
   }
 
+  // ==================== Stream Info (Stremio P2P / HTTP stats) ====================
+
+  private var lastTorrentStats: TorrentStats? = null
+  private var activeInfoHash: String? = null
+  private var firstTorrentAttempt: Long = 0L
+  private val statsGracePeriodMs = 15_000L
+
+  // Connected-seeder count is only reported while pieces are actively being
+  // requested (`wires` empties when the stream is buffered/idle). Retain the
+  // last known value so the overlay doesn't collapse to a misleading 0.
+  private var lastKnownSeeds = 0
+
+  // Global swarm seeder count comes from the trackers themselves; polled
+  // occasionally (HTTP trackers only) since the engine doesn't expose it.
+  private var swarmSeeds: Int? = null
+  private var lastSwarmPollMs = 0L
+  private var swarmPollInFlight = false
+  private val swarmPollIntervalMs = 60_000L
+
+  // Temporary diagnostics for buffering/stutter investigation.
+  private var lastStatsPath: String? = null
+  private var lastPausedForCache = false
+  private var lastCachePausePos = 0.0
+  private var lastDiagLogMs = 0L
+  private var lastVideoPlaying = false
+
+  fun showStreamInfo() {
+    streamStatsPanelVisible.value = true
+    _streamInfoDismissed.value = false
+  }
+
+  fun dismissStreamInfo() {
+    streamStatsPanelVisible.value = false
+    _streamInfoDismissed.value = true
+  }
+
+  private suspend fun updateStreamStats() {
+    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+    if (path != lastStatsPath) {
+      lastStatsPath = path
+      _streamInfoDismissed.value = false
+      _streamInfoAutoConsumed.value = false
+      lastVideoPlaying = false
+    }
+    val isNetwork = path != null && StreamTuning.isNetworkUri(path)
+    if (!isNetwork) {
+      if (_streamStats.value.isNetwork) {
+        _streamStats.value = StreamStats()
+      }
+      lastTorrentStats = null
+      activeInfoHash = null
+      firstTorrentAttempt = 0L
+      lastKnownSeeds = 0
+      swarmSeeds = null
+      _streamInfoDismissed.value = false
+      _streamInfoAutoConsumed.value = false
+      lastVideoPlaying = false
+      return
+    }
+
+    val infoHash = path?.let { StreamStatsFetcher.parseInfoHash(it) }
+    var torrentStats: TorrentStats? = null
+    if (infoHash != null) {
+      if (infoHash != activeInfoHash) {
+        activeInfoHash = infoHash
+        lastTorrentStats = null
+        firstTorrentAttempt = SystemClock.elapsedRealtime()
+        lastKnownSeeds = 0
+        swarmSeeds = null
+        lastSwarmPollMs = 0L
+        _streamInfoDismissed.value = false
+        _streamInfoAutoConsumed.value = false
+        lastVideoPlaying = false
+        val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
+        Log.d(TAG, "Torrent stream detected: $infoHash, stats URL: $statsUrl")
+      }
+      val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
+      torrentStats = statsUrl?.let {
+        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchTorrentStats(it) }
+      }
+      if (torrentStats != null) {
+        lastTorrentStats = torrentStats
+        if (torrentStats.hasWireData) {
+          lastKnownSeeds = torrentStats.seeds
+        }
+        maybePollSwarmSeeds(infoHash, torrentStats)
+      }
+    }
+
+    val bufferedSeconds =
+      (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
+        .toFloat()
+
+    // Grace period: if the stats endpoint never responds (e.g. a false-positive
+    // hash detection on a plain HTTP stream), degrade to the HTTP-only view.
+    val stats = torrentStats ?: lastTorrentStats
+    val elapsed =
+      if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
+    val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
+
+    val speedBytesPerSec =
+      stats?.downloadSpeed?.takeIf { it > 0 }
+        ?: (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
+
+    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
+    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
+    if (pausedForCache && !lastPausedForCache) {
+      lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+      Log.d(
+        TAG,
+        "BUFFER pause start: pos=${lastCachePausePos} " +
+          "cache=${"%.1f".format(runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)}s",
+      )
+    }
+    if (!pausedForCache && lastPausedForCache) {
+      val resumePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+      Log.d(TAG, "BUFFER resume: pausePos=$lastCachePausePos resumePos=$resumePos " +
+        "delta=${"%.2f".format(resumePos - lastCachePausePos)}")
+    }
+    lastPausedForCache = pausedForCache
+
+    // One-shot auto-show: once the video actually begins playing, never
+    // auto-show the stream-info overlay again for this playback (manual "i"
+    // button is the only way). A position reset to ~0 means a new session.
+    val timePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+    val videoPlaying = timePos > 0.5 && !pausedForCache
+    if (videoPlaying) {
+      lastVideoPlaying = true
+      if (!_streamInfoAutoConsumed.value) {
+        _streamInfoAutoConsumed.value = true
+        Log.d(TAG, "StreamInfo: video begun (pos=$timePos), auto overlay consumed")
+      }
+    } else if (lastVideoPlaying && timePos <= 0.5) {
+      lastVideoPlaying = false
+      _streamInfoAutoConsumed.value = false
+      _streamInfoDismissed.value = false
+      Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
+    }
+
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastDiagLogMs > 10_000L) {
+      lastDiagLogMs = now
+      val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()
+      val codec = runCatching { MPVLib.getPropertyString("video-format") }.getOrNull()
+      val fps = runCatching { MPVLib.getPropertyDouble("container-fps") }.getOrNull()
+      val buffering = runCatching { MPVLib.getPropertyInt("cache-buffering-state") }.getOrNull()
+      val cacheSpeed = runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull()
+      Log.d(
+        TAG,
+        "DIAG isTorrent=$isTorrent pausedForCache=$pausedForCache " +
+          "buffering=$buffering cache=${"%.1f".format(bufferedSeconds)}s " +
+          "cacheSpeed=$cacheSpeed hwdec=$hwdec codec=$codec fps=$fps " +
+          "coreIdle=${runCatching { MPVLib.getPropertyBoolean("core-idle") }.getOrNull()}",
+      )
+    }
+
+    _streamStats.value =
+      StreamStats(
+        isNetwork = true,
+        isTorrent = isTorrent,
+        fetchingMetadata = isTorrent && stats == null,
+        hasTorrentStats = stats != null,
+        bufferedSeconds = bufferedSeconds,
+        seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
+        peers = stats?.peers ?: 0,
+        swarmSeeds = swarmSeeds,
+        speedBytesPerSec = speedBytesPerSec,
+      )
+  }
+
+  private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
+    if (stats.trackerUrls.isEmpty() || swarmPollInFlight) return
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastSwarmPollMs < swarmPollIntervalMs) return
+    lastSwarmPollMs = now
+    swarmPollInFlight = true
+    viewModelScope.launch {
+      try {
+        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchSwarmSeeds(infoHash, stats.trackerUrls) }
+          ?.let { swarmSeeds = it }
+      } finally {
+        swarmPollInFlight = false
+      }
+    }
+  }
+
   // ==================== Ambient Mode Integration ====================
 
   fun toggleAmbientMode() = ambientModeManager.toggleAmbientMode()
-
   fun onOrientationChanged(isPortrait: Boolean) = ambientModeManager.onOrientationChanged(isPortrait)
 
   fun resetAmbientMode() = ambientModeManager.resetAmbientMode()

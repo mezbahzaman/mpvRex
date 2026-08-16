@@ -182,6 +182,11 @@
     <string name="pref_player_custom_skip_duration_summary">Duration to skip forward on custom skip button</string>
     <string name="pref_player_seeking_title">Seeking</string>
     <string name="pref_player_close_after_eof">Close after the end of playback</string>
+    <string name="buffering_percent">Buffering %1$d%%</string>
+    <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
+    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$s</string>
+    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$s • %5$d in swarm</string>
+    <string name="stream_stats_line_http">%1$ds buffered • %2$s</string>
     <string name="pref_player_remember_brightness">Remember display brightness</string>
 
     <string name="pref_player_gestures">Gestures</string>
@@ -1025,6 +1030,7 @@
     <string name="btn_label_background_playback">Background Playback</string>
     <string name="btn_label_ambient_mode">Ambience Mode</string>
     <string name="btn_label_sleep_timer">Sleep Timer</string>
+    <string name="btn_label_stream_info">Stream Info</string>
     <string name="btn_label_none">None</string>
 
 

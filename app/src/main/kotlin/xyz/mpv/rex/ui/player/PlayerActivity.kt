@@ -57,6 +57,7 @@ import xyz.mpv.rex.ui.player.controls.PlayerControls
 import xyz.mpv.rex.ui.theme.MpvexPlayerTheme
 import xyz.mpv.rex.utils.history.RecentlyPlayedOps
 import xyz.mpv.rex.utils.media.HttpUtils
+import xyz.mpv.rex.utils.media.StreamTuning
 import xyz.mpv.rex.utils.media.SubtitleOps
 import xyz.mpv.rex.utils.media.M3UParser
 import xyz.mpv.rex.utils.media.FolderPlaylistOps
@@ -232,6 +233,7 @@ class PlayerActivity :
   private var mpvInitialized = false // Track MPV initialization state
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
   private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
+  private var intentPositionMs = POSITION_NOT_SET // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
   private var lastVid = -1 // Track video track for background playback optimization
   private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
   private var inheritedNativeSession = false // MPV ownership came from HeadlessPlaybackController
@@ -347,6 +349,8 @@ class PlayerActivity :
     setContentView(binding.root)
 
     pendingIntentExtras = true
+    intentPositionMs = POSITION_NOT_SET
+    logIntentExtras("onCreate", intent)
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
     // a second time.
@@ -1189,11 +1193,32 @@ class PlayerActivity :
     if (extras == null) return
 
     extras.getInt("position", POSITION_NOT_SET).takeIf { it != POSITION_NOT_SET }?.let {
+      intentPositionMs = it
       MPVLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
     }
+    Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs (requested=${extras.getInt("position", POSITION_NOT_SET)})")
 
     addSubtitlesFromExtras(extras)
     setHttpHeadersFromExtras(extras)
+  }
+
+  /**
+   * Logs the full launch intent (action, data, type, and all extras) for debugging
+   * external launcher integration (e.g. Stremio sending a "position" extra).
+   *
+   * @param source Where the intent came from ("onCreate" or "onNewIntent")
+   * @param intent The incoming intent
+   */
+  private fun logIntentExtras(source: String, intent: Intent) {
+    Log.d(TAG, "$source intent: action=${intent.action} type=${intent.type} data=${intent.data}")
+    val extras = intent.extras
+    if (extras == null) {
+      Log.d(TAG, "$source intent: no extras")
+      return
+    }
+    for (key in extras.keySet()) {
+      Log.d(TAG, "$source intent extra[$key] = ${extras.get(key)}")
+    }
   }
 
   /**
@@ -1338,12 +1363,15 @@ class PlayerActivity :
    * @param intent The intent containing the file URI
    * @return The resolved file path, or null if not found
    */
-  private fun parsePathFromIntent(intent: Intent): String? =
-    when (intent.action) {
+  private fun parsePathFromIntent(intent: Intent): String? {
+    // Log the raw incoming URL (e.g. Stremio's local HTTP/P2P stream URL) for verification
+    Log.d(TAG, "Incoming intent action=${intent.action} data=${intent.data}")
+    return when (intent.action) {
       Intent.ACTION_VIEW -> intent.data?.resolveUri(this)
       Intent.ACTION_SEND -> parsePathFromSendIntent(intent)
       else -> intent.getStringExtra("uri")
     }
+  }
 
   /**
    * Parses the file path from a SEND intent.
@@ -1557,6 +1585,18 @@ class PlayerActivity :
     if (intentWidth > 0 && intentHeight > 0) {
       setOrientation(intentWidth, intentHeight, intentRotation)
       return
+    }
+
+    // 2b. Network streams (e.g. Stremio external player) have no known dimensions
+    // yet, so default to landscape immediately in Video mode to avoid the portrait
+    // flash. The aspect-ratio observer corrects it once the video actually loads.
+    if (orient == PlayerOrientation.Video) {
+      val playableUri = getPlayableUri(targetIntent)
+      if (playableUri != null && StreamTuning.isNetworkUri(playableUri)) {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        Log.d(TAG, "applyInitialOrientationFromIntent - Video mode: provisional landscape for network stream")
+        return
+      }
     }
 
     // 3. Fallback: try saved orientation from DB or metadata cache asynchronously
@@ -2394,7 +2434,9 @@ class PlayerActivity :
   private suspend fun applyPlaybackState(state: PlaybackStateEntity?) {
     if (state == null) {
       // Force reset position for new items in playlist
-      MPVLib.setPropertyInt("time-pos", 0)
+      if (intentPositionMs == POSITION_NOT_SET) {
+        MPVLib.setPropertyInt("time-pos", 0)
+      }
       return
     }
 
@@ -2458,10 +2500,14 @@ class PlayerActivity :
     MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
     viewModel.setVideoZoom(state.videoZoom)
 
-    if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
-      MPVLib.setPropertyInt("time-pos", state.lastPosition)
+    if (intentPositionMs == POSITION_NOT_SET) {
+      if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
+        MPVLib.setPropertyInt("time-pos", state.lastPosition)
+      } else {
+        MPVLib.setPropertyInt("time-pos", 0)
+      }
     } else {
-      MPVLib.setPropertyInt("time-pos", 0)
+      Log.d(TAG, "applyPlaybackState: honoring incoming position extra ${intentPositionMs}ms")
     }
   }
 
@@ -2511,6 +2557,8 @@ class PlayerActivity :
     super.onNewIntent(intent)
 
     pendingIntentExtras = true
+    intentPositionMs = POSITION_NOT_SET
+    logIntentExtras("onNewIntent", intent)
     // Update the intent first so getFileName uses the new intent data
     setIntent(intent)
 
@@ -2645,6 +2693,7 @@ class PlayerActivity :
         }
         // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
         lifecycleScope.launch(Dispatchers.Default) {
+          StreamTuning.applyTuningForUri(uriStr)
           MPVLib.command("loadfile", uriStr)
         }
       }
@@ -3653,6 +3702,7 @@ class PlayerActivity :
     // Load the new video
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
+      StreamTuning.applyTuningForUri(playableUri)
       MPVLib.command("loadfile", playableUri)
     }
 
@@ -3844,6 +3894,7 @@ class PlayerActivity :
           }
           if (mpvInitialized) {
             lifecycleScope.launch(Dispatchers.Default) {
+              StreamTuning.applyTuningForUri(uriStr)
               MPVLib.command("loadfile", uriStr)
             }
           } else {
