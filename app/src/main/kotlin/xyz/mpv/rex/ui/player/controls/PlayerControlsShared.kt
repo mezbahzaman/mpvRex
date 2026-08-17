@@ -54,6 +54,8 @@ import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.outlined.BlurOn
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.ui.draw.rotate
@@ -92,6 +94,7 @@ import xyz.mpv.rex.ui.player.controls.components.CurrentChapter
 import xyz.mpv.rex.ui.theme.controlColor
 import xyz.mpv.rex.ui.theme.spacing
 import dev.vivvvek.seeker.Segment
+import `is`.xyz.mpv.MPVLib
 
 @Composable
 fun RenderPlayerButton(
@@ -1263,6 +1266,77 @@ fun RenderPlayerButton(
       }
     }
 
+    PlayerButton.STREAM_INFO -> {
+      val streamStats by viewModel.streamStats.collectAsState()
+      val isStreamInfoPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
+      val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
+      val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
+      val pausedForCache by MPVLib.propBoolean["paused-for-cache"].collectAsState()
+      val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
+      val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
+      val streamInfoAutoVisible =
+        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
+      val isStreamInfoVisible = streamStats.isNetwork && (isStreamInfoPanelVisible || streamInfoAutoVisible)
+      val toggleStreamInfo = {
+        clickEvent()
+        if (isStreamInfoVisible) viewModel.dismissStreamInfo() else viewModel.showStreamInfo()
+      }
+
+      if (isMoreSheet) {
+        Surface(
+          shape = CircleShape,
+          color = if (isStreamInfoVisible) activeSurfaceColor else surfaceColor,
+          contentColor = if (isStreamInfoVisible) activeContentColor else contentColor,
+          border = if (isStreamInfoVisible) activeBorderColor else borderColor,
+          modifier = Modifier
+            .height(buttonSize)
+            .clip(CircleShape)
+            .clickable(onClick = toggleStreamInfo)
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.extraSmall),
+            modifier = Modifier.padding(horizontal = MaterialTheme.spacing.smaller)
+          ) {
+            Icon(
+              imageVector = if (isStreamInfoVisible) Icons.Filled.Info else Icons.Outlined.Info,
+              contentDescription = null,
+              modifier = Modifier.size(24.dp)
+            )
+            Text(
+              text = stringResource(R.string.btn_label_stream_info),
+              style = MaterialTheme.typography.bodyMedium,
+              maxLines = 1,
+            )
+          }
+        }
+      } else {
+        Surface(
+          shape = CircleShape,
+          color = if (isStreamInfoVisible) activeSurfaceColor else surfaceColor,
+          contentColor = if (isStreamInfoVisible) activeContentColor else contentColor,
+          border = if (isStreamInfoVisible) activeBorderColor else borderColor,
+          modifier = Modifier
+            .size(buttonSize)
+            .clip(CircleShape)
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = ripple(bounded = true),
+              onClick = toggleStreamInfo
+            ),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = if (isStreamInfoVisible) Icons.Filled.Info else Icons.Outlined.Info,
+              contentDescription = stringResource(R.string.btn_label_stream_info),
+              tint = if (isStreamInfoVisible) activeContentColor else contentColor,
+              modifier = Modifier.size(24.dp)
+            )
+          }
+        }
+      }
+    }
+
     PlayerButton.NONE -> { /* Do nothing */
     }
   }
@@ -1329,4 +1403,3 @@ fun Surface(
         content = content
     )
 }
-
