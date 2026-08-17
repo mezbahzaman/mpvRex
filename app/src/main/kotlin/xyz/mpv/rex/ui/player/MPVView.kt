@@ -127,11 +127,10 @@ class MPVView(
       MPVLib.setOptionString("gpu-context", "androidvk")
     }
 
-    // Set hwdec with fallback order: HW+ (mediacodec) -> SW (no)
-    // mediacodec-copy (HW) is omitted as it often causes Surface-related crashes on certain devices
+    // Decoder fallback order: HW+ (zero-copy) -> HW (copy-back) -> SW.
     MPVLib.setOptionString(
       "hwdec",
-      if (decoderPreferences.tryHWDecoding.get()) "mediacodec-copy,mediacodec,no" else "no",
+      if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
     )
     MPVLib.setOptionString("hwdec-codecs", "all")
 
@@ -295,6 +294,7 @@ class MPVView(
       "volume" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
       "hwdec-current" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
       "media-title" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
+      "path" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
       "demuxer-cache-duration" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
       "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
       "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
