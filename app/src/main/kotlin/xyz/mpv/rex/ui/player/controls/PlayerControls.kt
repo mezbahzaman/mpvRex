@@ -200,6 +200,7 @@ fun PlayerControls(
   val position by MPVLib.propInt["time-pos"].collectAsState()
   val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
   val demuxerCacheTime by MPVLib.propFloat["demuxer-cache-time"].collectAsState()
+  val demuxerCacheEnd by MPVLib.propFloat["demuxer-cache-state/cache-end"].collectAsState()
   val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
   val mediaPath by MPVLib.propString["path"].collectAsState()
   val precisePosition by viewModel.precisePosition.collectAsState()
@@ -226,6 +227,7 @@ fun PlayerControls(
   var dragStartValue by remember { mutableStateOf(-1f) }
   var isCloseToStart by remember { mutableStateOf(false) }
   var changeCount by remember { mutableStateOf(0) }
+  var pendingNetworkSeek by remember { mutableStateOf<Float?>(null) }
   var resetControlsTimestamp by remember { mutableStateOf(0L) }
   val seekText by viewModel.seekText.collectAsState()
   val currentChapter by MPVLib.propInt["chapter"].collectAsState()
@@ -1273,10 +1275,14 @@ fun PlayerControls(
           val currentPos = precisePosition.takeIf { it >= 0f } ?: position?.toFloat() ?: 0f
           val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
           val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
-          val isNetworkMedia = mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
-          val cacheEnd = demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPos }
+          val isNetworkMedia = streamStats.isNetwork || mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
+          val cacheEnd = demuxerCacheEnd?.takeIf { it.isFinite() && it >= currentPos }
+            ?: demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPos }
             ?: demuxerCacheDuration
               ?.takeIf { it.isFinite() && it > 0.1f }
+              ?.let { currentPos + it }
+            ?: streamStats.bufferedSeconds
+              .takeIf { it.isFinite() && it > 0.1f }
               ?.let { currentPos + it }
           val readAheadPosition = if (isNetworkMedia) {
             maxOf(currentPos, cacheEnd ?: currentPos).coerceAtMost(totalDuration)
@@ -1309,14 +1315,21 @@ fun PlayerControls(
                   viewModel.playerUpdate.value = PlayerUpdates.None
                 }
               }
-              viewModel.seekTo(newValue.toInt())
+              if (isNetworkMedia) {
+                pendingNetworkSeek = newValue
+              } else {
+                viewModel.seekTo(newValue.toInt())
+              }
               viewModel.autoHideControls()
             },
             onValueChangeFinished = {
               if (isCloseToStart) {
                 viewModel.seekTo(dragStartValue.toInt())
                 viewModel.playerUpdate.value = PlayerUpdates.None
+              } else if (isNetworkMedia) {
+                pendingNetworkSeek?.let { viewModel.seekTo(it.toInt()) }
               }
+              pendingNetworkSeek = null
               isSeeking = false
               dragStartValue = -1f
               isCloseToStart = false

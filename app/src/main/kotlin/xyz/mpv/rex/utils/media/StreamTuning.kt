@@ -28,6 +28,11 @@ object StreamTuning {
     return scheme in NETWORK_SCHEMES
   }
 
+  fun isAdaptiveManifestUri(uri: String): Boolean {
+    val path = runCatching { Uri.parse(uri).path }.getOrNull()?.lowercase() ?: return false
+    return path.endsWith(".m3u8") || path.endsWith(".mpd")
+  }
+
   fun isStremioTorrentUri(uri: String): Boolean {
     if (!isNetworkUri(uri)) return false
     val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return false

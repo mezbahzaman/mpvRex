@@ -493,7 +493,7 @@ class PlayerActivity :
         enableVideoAfterBackground()
         miniPlayerStateManager.clearState()
       }
-      if (isUriM3U(playableUri)) {
+      if (isM3uPlaylistUri(playableUri)) {
         loadM3uPlaylistOrPlayDirectly(playableUri)
       } else {
         if (playerPreferences.savePositionOnQuit.get()) {
@@ -2801,7 +2801,7 @@ class PlayerActivity :
       val fastDurationSec = if (fastDurationMs > 0L) fastDurationMs / 1000f else null
       viewModel.prepareForFileLoad(fastDurationSec)
 
-      if (parsedUri != null && isUriM3U(parsedUri)) {
+      if (parsedUri != null && isM3uPlaylistUri(parsedUri)) {
         loadM3uPlaylistOrPlayDirectly(uriStr)
       } else {
         if (playerPreferences.savePositionOnQuit.get()) {
@@ -3957,6 +3957,13 @@ class PlayerActivity :
     return lowerUrl.contains(".m3u8") || lowerUrl.contains(".m3u") ||
       lowerUrl.endsWith(".m3u8") || lowerUrl.endsWith(".m3u")
   }
+
+  /** HLS manifests must remain intact instead of being expanded as channel playlists. */
+  private fun isM3uPlaylistUri(uriStr: String): Boolean {
+    return isUriM3U(uriStr) && !StreamTuning.isAdaptiveManifestUri(uriStr)
+  }
+
+  private fun isM3uPlaylistUri(uri: Uri): Boolean = isM3uPlaylistUri(uri.toString())
 
   /**
    * Check if a specific URI is an m3u or m3u8 file/stream.

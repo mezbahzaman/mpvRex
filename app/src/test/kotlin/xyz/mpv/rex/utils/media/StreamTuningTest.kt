@@ -1,6 +1,8 @@
 package xyz.mpv.rex.utils.media
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StreamTuningTest {
@@ -27,5 +29,12 @@ class StreamTuningTest {
       StreamTuning.CacheLimits("4611686018427387903", "1.7976931348623157e308"),
       StreamTuning.cacheLimits(0, 0),
     )
+  }
+
+  @Test
+  fun adaptiveManifestsAreRecognizedFromTheirUrlPath() {
+    assertTrue(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/index.m3u8?token=abc"))
+    assertTrue(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/manifest.mpd"))
+    assertFalse(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/movie.mp4?source=.m3u8"))
   }
 }
