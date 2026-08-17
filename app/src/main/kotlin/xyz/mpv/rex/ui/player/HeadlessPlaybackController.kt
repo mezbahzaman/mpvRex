@@ -17,6 +17,7 @@ import xyz.mpv.rex.preferences.PlayerPreferences
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
 import xyz.mpv.rex.utils.history.RecentlyPlayedOps
 import xyz.mpv.rex.utils.media.MediaThumbnailUtils
+import xyz.mpv.rex.utils.media.StreamTuning
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import org.koin.core.component.KoinComponent
@@ -285,6 +286,7 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
     activeTitle = title
 
     val playable = uri.resolveUri(appContext) ?: uri.toString()
+    StreamTuning.applyTuningForUri(playable)
     runCatching { MPVLib.command("loadfile", playable) }
     runCatching { MPVLib.setPropertyBoolean("pause", false) }
 

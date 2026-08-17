@@ -10,6 +10,7 @@ on:
 
 jobs:
   release-for-github:
+    if: ${{ !endsWith(github.ref_name, '-stable') }}
     name: "Release for GitHub"
     runs-on: ubuntu-latest
 
