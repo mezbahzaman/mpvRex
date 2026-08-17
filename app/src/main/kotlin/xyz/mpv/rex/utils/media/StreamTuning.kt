@@ -2,6 +2,7 @@ package xyz.mpv.rex.utils.media
 
 import android.net.Uri
 import `is`.xyz.mpv.MPVLib
+import java.net.URI
 
 /**
  * Applies mpv options that improve playback smoothness for network and P2P (torrent)
@@ -29,7 +30,7 @@ object StreamTuning {
   }
 
   fun isAdaptiveManifestUri(uri: String): Boolean {
-    val path = runCatching { Uri.parse(uri).path }.getOrNull()?.lowercase() ?: return false
+    val path = runCatching { URI(uri).path }.getOrNull()?.lowercase() ?: return false
     return path.endsWith(".m3u8") || path.endsWith(".mpd")
   }
 
