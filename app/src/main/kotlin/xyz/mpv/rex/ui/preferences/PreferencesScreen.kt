@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SettingsSuggest
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -361,6 +362,26 @@ object PreferencesScreen : Screen {
                 onClick = { backstack.add(AdvancedPreferencesScreen) },
               )
               
+              PreferenceDivider()
+
+              Preference(
+                title = { Text(text = stringResource(R.string.pref_extra_settings_title)) },
+                summary = {
+                  Text(
+                    text = stringResource(R.string.pref_extra_settings_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                icon = {
+                  Icon(
+                    Icons.Outlined.SettingsSuggest,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                  )
+                },
+                onClick = { backstack.add(ExtraPreferencesScreen) },
+              )
+
               PreferenceDivider()
               
               Preference(
