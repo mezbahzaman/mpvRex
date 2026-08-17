@@ -261,6 +261,21 @@ object SubtitlesPreferencesScreen : Screen {
 
               PreferenceDivider()
 
+              val autoStremio by preferences.autoStremioSubtitles.collectAsState()
+              SwitchPreference(
+                value = autoStremio,
+                onValueChange = { preferences.autoStremioSubtitles.set(it) },
+                title = { Text(stringResource(R.string.pref_subtitles_auto_stremio_title)) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_subtitles_auto_stremio_summary),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
               val overrideAss by preferences.overrideAssSubs.collectAsState()
               SwitchPreference(
                 value = overrideAss,
