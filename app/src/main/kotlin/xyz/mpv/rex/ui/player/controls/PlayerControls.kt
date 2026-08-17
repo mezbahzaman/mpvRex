@@ -1984,8 +1984,8 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
               bufferedSeconds,
               streamStats.seeds,
               streamStats.peers,
-              speedText,
               swarmSeeds,
+              speedText,
             )
           } else {
             stringResource(
@@ -2009,4 +2009,3 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
     }
   }
 }
-

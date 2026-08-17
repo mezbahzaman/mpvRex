@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
+import android.net.TrafficStats
 import android.provider.OpenableColumns
 import android.os.SystemClock
 import android.provider.Settings
@@ -2311,6 +2312,8 @@ class PlayerViewModel(
 
   // Temporary diagnostics for buffering/stutter investigation.
   private var lastStatsPath: String? = null
+  private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
+  private var lastHttpSampleMs = 0L
   private var lastPausedForCache = false
   private var lastCachePausePos = 0.0
   private var lastDiagLogMs = 0L
@@ -2407,12 +2410,46 @@ class PlayerViewModel(
     return names.distinct()
   }
 
+  private fun decodedMetadataValues(url: String): List<String> {
+    val values = mutableListOf<String>()
+    fun collect(value: String, depth: Int) {
+      if (depth > 2 || value.isBlank()) return
+      var decoded = value
+      repeat(2) {
+        val next = runCatching { Uri.decode(decoded) }.getOrDefault(decoded)
+        if (next == decoded) return@repeat
+        decoded = next
+      }
+      values += decoded
+      val nested = runCatching { Uri.parse(decoded) }.getOrNull()
+      if (nested?.scheme in setOf("http", "https")) {
+        nested?.pathSegments?.forEach { collect(it, depth + 1) }
+        nested?.encodedQuery?.split("&")?.forEach { pair ->
+          collect(pair.substringAfter('=', ""), depth + 1)
+        }
+      }
+    }
+
+    val parsed = runCatching { Uri.parse(url) }.getOrNull()
+    parsed?.pathSegments?.forEach { collect(it, 0) }
+    parsed?.encodedQuery?.split("&")?.forEach { pair -> collect(pair.substringAfter('=', ""), 0) }
+    return values.distinct()
+  }
+
   private fun isProxyGenericName(name: String): Boolean {
     val low = name.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
     if (Regex("""^(movie|film|video|stream|file|media|index|download|watch)[.\-_]\d""").containsMatchIn(low)) {
       return true
     }
     return low in setOf("master", "playlist", "manifest", "index", "stream", "video", "media", "download", "watch")
+  }
+
+  private fun isUsefulMediaName(raw: String, title: String): Boolean {
+    if (raw.length !in 3..240 || !title.any { it.isLetter() }) return false
+    val low = raw.lowercase()
+    if (low.startsWith("http://") || low.startsWith("https://") || isProxyGenericName(raw)) return false
+    if (low in setOf("proxy", "direct", "external", "original", "world", "vip", "org_movie", "org_series")) return false
+    return !Regex("^[A-Za-z0-9_-]{24,}$").matches(raw)
   }
 
   private data class AutoSubSearch(
@@ -2426,26 +2463,39 @@ class PlayerViewModel(
     val fallbackName = path.substringAfterLast('/').substringBefore('?')
       .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
     val releaseNames = extractReleaseNamesFromQuery(path)
+    val metadataNames = decodedMetadataValues(path)
     releaseNames.forEach { Log.d(TAG, "AutoSub: release name from query params: '$it'") }
 
     val titleInfo = MediaInfoParser.parse(currentMediaTitle)
+    val mpvTitle = runCatching { MPVLib.getPropertyString("media-title") }.getOrNull().orEmpty()
+    val mpvTitleInfo = MediaInfoParser.parse(mpvTitle)
     val fallbackInfo = MediaInfoParser.parse(fallbackName)
-    val releaseInfos = releaseNames.map { it to MediaInfoParser.parse(it) }
+    val metadataInfos = (releaseNames + metadataNames).distinct().map { it to MediaInfoParser.parse(it) }
+    val bestEpisodeInfo = listOf(titleInfo, mpvTitleInfo, fallbackInfo)
+      .plus(metadataInfos.map { it.second })
+      .firstOrNull { it.season != null && it.episode != null }
     val imdbIds = Regex("""(?i)\btt\d{7,10}\b""")
-      .findAll(runCatching { URLDecoder.decode(path, "UTF-8") }.getOrDefault(path))
+      .findAll((metadataNames + path).joinToString(" "))
       .map { it.value.lowercase() }
       .toList()
 
     return buildList {
-      imdbIds.forEach { add(AutoSubSearch(it, null, null, null)) }
-      releaseInfos.forEach { (_, info) ->
-        if (info.title.isNotBlank()) add(AutoSubSearch(info.title, info.season, info.episode, info.year))
+      metadataInfos.forEach { (raw, info) ->
+        if (info.title.isNotBlank() && isUsefulMediaName(raw, info.title)) {
+          add(AutoSubSearch(info.title, info.season, info.episode, info.year))
+        }
       }
       if (titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle)) {
         add(AutoSubSearch(titleInfo.title, titleInfo.season, titleInfo.episode, titleInfo.year))
       }
+      if (mpvTitleInfo.title.isNotBlank() && !isProxyGenericName(mpvTitle)) {
+        add(AutoSubSearch(mpvTitleInfo.title, mpvTitleInfo.season, mpvTitleInfo.episode, mpvTitleInfo.year))
+      }
       if (fallbackInfo.title.isNotBlank() && !isProxyGenericName(fallbackName)) {
         add(AutoSubSearch(fallbackInfo.title, fallbackInfo.season, fallbackInfo.episode, fallbackInfo.year))
+      }
+      imdbIds.forEach {
+        add(AutoSubSearch(it, bestEpisodeInfo?.season, bestEpisodeInfo?.episode, bestEpisodeInfo?.year))
       }
     }.distinctBy { listOf(it.query.lowercase(), it.season, it.episode, it.year) }
   }
@@ -2505,6 +2555,8 @@ class PlayerViewModel(
       _streamInfoDismissed.value = false
       _streamInfoAutoConsumed.value = false
       lastVideoPlaying = false
+      lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
+      lastHttpSampleMs = SystemClock.elapsedRealtime()
     }
     val isNetwork = path != null && StreamTuning.isNetworkUri(path)
     if (!isNetwork) {
@@ -2555,12 +2607,6 @@ class PlayerViewModel(
       (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
         .toFloat()
 
-    // mpv can retain the last non-zero cache-speed value while a stream is
-    // paused, fully buffered, or finished. Do not present that stale value as
-    // active network traffic; keep showing downloads during cache recovery.
-    val paused = runCatching { MPVLib.getPropertyBoolean("pause") }.getOrNull() ?: false
-    val eofReached = runCatching { MPVLib.getPropertyBoolean("eof-reached") }.getOrNull() ?: false
-    val demuxerCacheIdle = runCatching { MPVLib.getPropertyBoolean("demuxer-cache-idle") }.getOrNull() ?: false
     val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
 
     // Grace period: if the stats endpoint never responds (e.g. a false-positive
@@ -2570,12 +2616,17 @@ class PlayerViewModel(
       if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
     val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
 
-    val speedBytesPerSec = if (!isTorrent && (paused || demuxerCacheIdle || eofReached)) {
-      0L
+    val now = SystemClock.elapsedRealtime()
+    val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
+    val httpSpeed = if (currentRxBytes != TrafficStats.UNSUPPORTED.toLong() &&
+      lastHttpRxBytes != TrafficStats.UNSUPPORTED.toLong() && lastHttpSampleMs > 0L && now > lastHttpSampleMs) {
+      ((currentRxBytes - lastHttpRxBytes).coerceAtLeast(0L) * 1000L) / (now - lastHttpSampleMs)
     } else {
-      if (stats != null) stats.downloadSpeed.coerceAtLeast(0)
-      else (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
+      (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
     }
+    lastHttpRxBytes = currentRxBytes
+    lastHttpSampleMs = now
+    val speedBytesPerSec = if (stats != null) stats.downloadSpeed.coerceAtLeast(0) else httpSpeed
 
     // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
     if (pausedForCache && !lastPausedForCache) {
@@ -2611,7 +2662,6 @@ class PlayerViewModel(
       Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
     }
 
-    val now = SystemClock.elapsedRealtime()
     if (now - lastDiagLogMs > 10_000L) {
       lastDiagLogMs = now
       val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()

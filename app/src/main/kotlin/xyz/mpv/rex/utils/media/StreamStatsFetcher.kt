@@ -1,9 +1,20 @@
 package xyz.mpv.rex.utils.media
 
 import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.URI
 import java.net.URL
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.random.Random
 
 /**
  * Live stats for network streams (Stremio HTTP / P2P torrents).
@@ -30,7 +41,7 @@ data class TorrentStats(
   val peers: Int,
   /** True when the engine reported active wire connections this poll (real seeder data). */
   val hasWireData: Boolean,
-  /** HTTP(S) tracker announce URLs advertised by the engine's `sources[]`. */
+  /** Tracker URLs advertised by the engine's `sources[]`. */
   val trackerUrls: List<String>,
 )
 
@@ -87,7 +98,7 @@ object StreamStatsFetcher {
             seeds = if (hasWireData) countSeeders(json) else 0,
             peers = json.optInt("peers", 0),
             hasWireData = hasWireData,
-            trackerUrls = httpTrackerUrls(json),
+            trackerUrls = trackerUrls(json),
           )
         }
       }
@@ -99,24 +110,35 @@ object StreamStatsFetcher {
   }
 
   /**
-   * Queries the torrent's HTTP(S) trackers (announce) and returns the maximum
+   * Queries the torrent's HTTP(S) and UDP trackers and returns the maximum
    * tracker-reported seeder count (`complete`). Returns null when every tracker
-   * fails or none are HTTP(S). Trackers are the only reliable source of the
+   * fails. Trackers are the only reliable source of the
    * global swarm seeder count; WebTorrent's own engine does not expose one.
    */
-  fun fetchSwarmSeeds(infoHash: String, trackerUrls: List<String>): Int? {
-    val rawHash = hexToBytes(infoHash) ?: return null
+  suspend fun fetchSwarmSeeds(infoHash: String, trackerUrls: List<String>): Int? = coroutineScope {
+    val rawHash = hexToBytes(infoHash) ?: return@coroutineScope null
     val infoHashParam = percentEncode(rawHash)
     val peerId = percentEncode("-MP0001-0123456789ab".toByteArray(Charsets.ISO_8859_1))
     val query =
       "info_hash=$infoHashParam&peer_id=$peerId&port=6881" +
-        "&uploaded=0&downloaded=0&left=0&compact=1&numwant=0&event=started"
+        "&uploaded=0&downloaded=0&left=1&compact=1&numwant=0"
 
-    var maxSeeds: Int? = null
-    for (tracker in trackerUrls) {
+    trackerUrls.distinct().take(12).map { tracker ->
+      async(Dispatchers.IO) {
+        when {
+          tracker.startsWith("udp://", ignoreCase = true) -> fetchUdpTrackerSeeds(rawHash, tracker)
+          tracker.startsWith("http://", ignoreCase = true) || tracker.startsWith("https://", ignoreCase = true) ->
+            fetchHttpTrackerSeeds(tracker, query)
+          else -> null
+        }
+      }
+    }.awaitAll().filterNotNull().maxOrNull()
+  }
+
+  private fun fetchHttpTrackerSeeds(tracker: String, query: String): Int? {
       var connection: HttpURLConnection? = null
-      try {
-        val announceUrl = "$tracker?$query"
+      return try {
+        val announceUrl = "$tracker${if (tracker.contains('?')) "&" else "?"}$query"
         connection = URL(announceUrl).openConnection() as HttpURLConnection
         connection.connectTimeout = 3000
         connection.readTimeout = 3000
@@ -124,17 +146,80 @@ object StreamStatsFetcher {
         connection.setRequestProperty("User-Agent", "mpvRex/4.5")
         if (connection.responseCode in 200..299) {
           val body = connection.inputStream.readBytes().toString(Charsets.ISO_8859_1)
-          bencodeInt(body, "complete")?.let { complete ->
-            maxSeeds = maxOf(maxSeeds ?: 0, complete)
-          }
-        }
+          bencodeInt(body, "complete")
+        } else null
       } catch (_: Exception) {
-        // Individual trackers often fail; keep trying the rest.
+        null
       } finally {
         connection?.disconnect()
       }
-    }
-    return maxSeeds
+  }
+
+  /** BEP 15 scrape: returns the tracker's complete/seeder count without announcing. */
+  private fun fetchUdpTrackerSeeds(infoHash: ByteArray, tracker: String): Int? {
+    val uri = runCatching { URI(tracker) }.getOrNull() ?: return null
+    val host = uri.host ?: return null
+    val port = uri.port.takeIf { it > 0 } ?: 80
+    val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return null
+    return runCatching {
+      DatagramSocket().use { socket ->
+        socket.soTimeout = 2500
+        val connectTx = Random.nextInt()
+        val connect = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
+          .putLong(0x41727101980L).putInt(0).putInt(connectTx).array()
+        socket.send(DatagramPacket(connect, connect.size, address, port))
+        val connectResponse = ByteArray(16)
+        val connectPacket = DatagramPacket(connectResponse, connectResponse.size)
+        socket.receive(connectPacket)
+        val connected = ByteBuffer.wrap(connectResponse, 0, connectPacket.length).order(ByteOrder.BIG_ENDIAN)
+        if (connectPacket.length < 16 || connected.int != 0 || connected.int != connectTx) return@use null
+        val connectionId = connected.long
+
+        val scrapeTx = Random.nextInt()
+        val scrape = ByteBuffer.allocate(36).order(ByteOrder.BIG_ENDIAN)
+          .putLong(connectionId).putInt(2).putInt(scrapeTx).put(infoHash).array()
+        socket.send(DatagramPacket(scrape, scrape.size, address, port))
+        val scrapeResponse = ByteArray(32)
+        val scrapePacket = DatagramPacket(scrapeResponse, scrapeResponse.size)
+        val scraped = runCatching {
+          socket.receive(scrapePacket)
+          val result = ByteBuffer.wrap(scrapeResponse, 0, scrapePacket.length).order(ByteOrder.BIG_ENDIAN)
+          if (scrapePacket.length < 20 || result.int != 2 || result.int != scrapeTx) null
+          else result.int.coerceAtLeast(0)
+        }.getOrNull()
+        scraped ?: fetchUdpAnnounceSeeds(socket, address, port, connectionId, infoHash)
+      }
+    }.getOrNull()
+  }
+
+  private fun fetchUdpAnnounceSeeds(
+    socket: DatagramSocket,
+    address: InetAddress,
+    port: Int,
+    connectionId: Long,
+    infoHash: ByteArray,
+  ): Int? {
+    val transactionId = Random.nextInt()
+    val peerId = "-MP0001-0123456789ab".toByteArray(Charsets.ISO_8859_1)
+    val announce = ByteBuffer.allocate(98).order(ByteOrder.BIG_ENDIAN)
+      .putLong(connectionId).putInt(1).putInt(transactionId)
+      .put(infoHash).put(peerId)
+      .putLong(0).putLong(1).putLong(0)
+      .putInt(0).putInt(0).putInt(Random.nextInt()).putInt(-1).putShort(6881.toShort())
+      .array()
+    return runCatching {
+      socket.send(DatagramPacket(announce, announce.size, address, port))
+      val response = ByteArray(32)
+      val packet = DatagramPacket(response, response.size)
+      socket.receive(packet)
+      val result = ByteBuffer.wrap(response, 0, packet.length).order(ByteOrder.BIG_ENDIAN)
+      if (packet.length < 20 || result.int != 1 || result.int != transactionId) null
+      else {
+        result.int // interval
+        result.int // leechers
+        result.int.coerceAtLeast(0)
+      }
+    }.getOrNull()
   }
 
   /** Reads a bencoded integer value: `{key-len}:{key}i{value}e`. */
@@ -149,18 +234,25 @@ object StreamStatsFetcher {
     return body.substring(valueStart + 1, valueEnd).toIntOrNull()
   }
 
-  /** HTTP(S) tracker announce URLs from the engine's `sources[]`. */
-  private fun httpTrackerUrls(json: JSONObject): List<String> {
+  /** HTTP(S)/UDP tracker URLs from string or object entries in `sources[]`. */
+  internal fun trackerUrls(json: JSONObject): List<String> {
     val sources = json.optJSONArray("sources") ?: return emptyList()
-    val urls = mutableListOf<String>()
+    val rawUrls = mutableListOf<String>()
     for (i in 0 until sources.length()) {
-      val url = sources.optJSONObject(i)?.optString("url") ?: continue
-      if (url.startsWith("tracker:http://") || url.startsWith("tracker:https://")) {
-        urls.add(url.removePrefix("tracker:"))
+      val entry = sources.opt(i)
+      rawUrls += when (entry) {
+        is String -> entry
+        is JSONObject -> entry.optString("url")
+        else -> ""
       }
     }
-    return urls
+    return normalizeTrackerUrls(rawUrls)
   }
+
+  internal fun normalizeTrackerUrls(values: List<String>): List<String> =
+    values.map { it.removePrefix("tracker:") }
+      .filter { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("udp://") }
+      .distinct()
 
   private fun countSeeders(json: JSONObject): Int {
     val wires = json.optJSONArray("wires") ?: return 0

@@ -1327,8 +1327,8 @@ class PlayerActivity :
     val uri = intent.data?.toString() ?: return false
     if (!StreamTuning.isNetworkUri(uri)) return false
     if (StreamTuning.isStremioTorrentUri(uri)) return true
-    return intent.getBooleanExtra("return_result", false) &&
-      (intent.hasExtra("position") || intent.hasExtra("startfrom"))
+    return intent.getBooleanExtra("return_result", false) ||
+      intent.hasExtra("subtitleUrl") || intent.hasExtra("subtitles")
   }
 
   /**
