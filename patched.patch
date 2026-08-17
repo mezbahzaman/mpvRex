@@ -37151,7 +37151,7 @@ index a7a5287..2ba9385 100644
      runCatching { MPVLib.setPropertyBoolean("pause", false) }
  
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
-index 00c28bf..3141718 100644
+index 6072880..b4a7e15 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/MPVView.kt
 @@ -15,6 +15,7 @@ import xyz.mpv.rex.preferences.SubtitlesPreferences
@@ -37162,7 +37162,7 @@ index 00c28bf..3141718 100644
  import `is`.xyz.mpv.BaseMPVView
  import `is`.xyz.mpv.KeyMapping
  import `is`.xyz.mpv.MPVLib
-@@ -127,11 +128,10 @@ class MPVView(
+@@ -127,8 +128,7 @@ class MPVView(
        MPVLib.setOptionString("gpu-context", "androidvk")
      }
  
@@ -37171,12 +37171,8 @@ index 00c28bf..3141718 100644
 +    // Decoder fallback order: HW+ (zero-copy) -> HW (copy-back) -> SW.
      MPVLib.setOptionString(
        "hwdec",
--      if (decoderPreferences.tryHWDecoding.get()) "mediacodec-copy,mediacodec,no" else "no",
-+      if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
-     )
-     MPVLib.setOptionString("hwdec-codecs", "all")
- 
-@@ -295,7 +295,9 @@ class MPVView(
+       if (decoderPreferences.tryHWDecoding.get()) "mediacodec,no" else "no",
+@@ -294,7 +294,9 @@ class MPVView(
        "volume" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
        "hwdec-current" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
        "media-title" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
@@ -37186,7 +37182,7 @@ index 00c28bf..3141718 100644
        "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
        "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
        "sub-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
-@@ -341,6 +343,8 @@ class MPVView(
+@@ -338,6 +340,8 @@ class MPVView(
  
    // Setup
    private fun setupSubtitlesOptions() {
