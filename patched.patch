@@ -22,7 +22,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..8fd4b6a 100644
+index b937ac6..6977a21 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -31,8 +31,8 @@ index b937ac6..8fd4b6a 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 228
-+    versionName = "4.5.5"
++    versionCode = 227
++    versionName = "4.5.4"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -36821,18 +36821,6 @@ index 180926c..b80387a 100644
        val watched = state?.hasBeenWatched == true ||
          (state != null && item.duration > 0 && state.timeRemaining >= 0 &&
            ((item.duration / 1000 - state.timeRemaining).toFloat() / (item.duration / 1000).coerceAtLeast(1)) >= watchedThreshold / 100f)
-diff --git a/app/src/main/kotlin/xyz/mpv/rex/di/DatabaseModule.kt b/app/src/main/kotlin/xyz/mpv/rex/di/DatabaseModule.kt
-index b2f108c..c2b370e 100644
---- a/app/src/main/kotlin/xyz/mpv/rex/di/DatabaseModule.kt
-+++ b/app/src/main/kotlin/xyz/mpv/rex/di/DatabaseModule.kt
-@@ -573,6 +573,7 @@ val DatabaseModule =
-     }
- 
-     single { ThumbnailRepository(androidContext()) }
-+    single { xyz.mpv.rex.domain.thumbnail.SeekPreviewRepository(androidContext()) }
- 
-     single {
-       xyz.mpv.rex.database.repository.VideoMetadataCacheRepository(
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/di/PreferencesModule.kt b/app/src/main/kotlin/xyz/mpv/rex/di/PreferencesModule.kt
 index 9f72215..0811059 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/di/PreferencesModule.kt
@@ -36853,289 +36841,6 @@ index 9f72215..0811059 100644
      singleOf(::SubtitlesPreferences)
      singleOf(::AudioPreferences)
      singleOf(::AdvancedPreferences)
-diff --git a/app/src/main/kotlin/xyz/mpv/rex/domain/thumbnail/SeekPreviewRepository.kt b/app/src/main/kotlin/xyz/mpv/rex/domain/thumbnail/SeekPreviewRepository.kt
-new file mode 100644
-index 0000000..8ca22fe
---- /dev/null
-+++ b/app/src/main/kotlin/xyz/mpv/rex/domain/thumbnail/SeekPreviewRepository.kt
-@@ -0,0 +1,277 @@
-+package xyz.mpv.rex.domain.thumbnail
-+
-+import android.content.Context
-+import android.graphics.Bitmap
-+import android.graphics.BitmapFactory
-+import android.media.MediaMetadataRetriever
-+import android.net.Uri
-+import android.os.Build
-+import android.util.LruCache
-+import java.io.ByteArrayOutputStream
-+import java.io.File
-+import java.security.MessageDigest
-+import kotlin.math.ceil
-+import kotlin.math.roundToInt
-+import kotlinx.coroutines.CancellationException
-+import kotlinx.coroutines.CoroutineScope
-+import kotlinx.coroutines.Dispatchers
-+import kotlinx.coroutines.Job
-+import kotlinx.coroutines.SupervisorJob
-+import kotlinx.coroutines.flow.MutableStateFlow
-+import kotlinx.coroutines.flow.StateFlow
-+import kotlinx.coroutines.flow.asStateFlow
-+import kotlinx.coroutines.currentCoroutineContext
-+import kotlinx.coroutines.ensureActive
-+import kotlinx.coroutines.launch
-+import kotlinx.coroutines.sync.Mutex
-+import kotlinx.coroutines.sync.withLock
-+import kotlinx.coroutines.withContext
-+
-+class SeekPreviewRepository(
-+  private val context: Context,
-+) {
-+  private val cacheDir = File(context.cacheDir, "seek-previews").apply { mkdirs() }
-+  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-+  private val memoryCache =
-+    object : LruCache<String, Bitmap>(MEMORY_CACHE_BYTES) {
-+      override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
-+    }
-+  private val _cacheRevision = MutableStateFlow(0)
-+  val cacheRevision: StateFlow<Int> = _cacheRevision.asStateFlow()
-+  private val decoderMutex = Mutex()
-+
-+  @Volatile private var activePath: String? = null
-+  @Volatile private var activeKey: String? = null
-+  private var generationJob: Job? = null
-+
-+  @Synchronized
-+  fun prepare(
-+    path: String,
-+    source: String = path,
-+    headers: Map<String, String> = emptyMap(),
-+    durationHintSeconds: Float? = null,
-+  ) {
-+    if (path.isBlank()) return
-+    val key = cacheKey(path, source, headers)
-+    if (activeKey == key && generationJob?.isActive == true) return
-+
-+    generationJob?.cancel()
-+    activePath = path
-+    activeKey = key
-+    synchronized(memoryCache) { memoryCache.evictAll() }
-+
-+    val mediaDir = File(cacheDir, key)
-+    val completed = completeFile(mediaDir)
-+    val isNetworkSource = Uri.parse(source).scheme?.lowercase() in setOf("http", "https")
-+    val isFresh = !isNetworkSource || System.currentTimeMillis() - completed.lastModified() < NETWORK_CACHE_MAX_AGE_MS
-+    if (completed.exists() && isFresh) {
-+      _cacheRevision.value++
-+      return
-+    }
-+    if (completed.exists()) mediaDir.deleteRecursively()
-+
-+    generationJob = scope.launch {
-+      decoderMutex.withLock {
-+        currentCoroutineContext().ensureActive()
-+        if (activeKey == key) generate(source, headers, durationHintSeconds, key, mediaDir)
-+      }
-+    }
-+  }
-+
-+  @Synchronized
-+  fun cancel() {
-+    generationJob?.cancel()
-+    generationJob = null
-+    activePath = null
-+    activeKey = null
-+    synchronized(memoryCache) { memoryCache.evictAll() }
-+  }
-+
-+  suspend fun frameAt(
-+    path: String,
-+    durationSeconds: Float,
-+    positionSeconds: Float,
-+  ): Bitmap? = withContext(Dispatchers.IO) {
-+    if (path.isBlank() || durationSeconds <= 0f) return@withContext null
-+    val key = activeKey.takeIf { activePath == path } ?: return@withContext null
-+    val mediaDir = File(cacheDir, key)
-+    val count = countFile(mediaDir).readTextOrNull()?.toIntOrNull() ?: return@withContext null
-+
-+    val preferred = nearestFrameIndex(positionSeconds, durationSeconds, count)
-+    val index = nearestAvailableIndex(mediaDir, preferred, count) ?: return@withContext null
-+    val memoryKey = "$key:$index"
-+    synchronized(memoryCache) { memoryCache.get(memoryKey) }?.let { return@withContext it }
-+
-+    BitmapFactory.decodeFile(frameFile(mediaDir, index).absolutePath)?.also {
-+      synchronized(memoryCache) { memoryCache.put(memoryKey, it) }
-+    }
-+  }
-+
-+  private suspend fun generate(
-+    path: String,
-+    headers: Map<String, String>,
-+    durationHintSeconds: Float?,
-+    key: String,
-+    mediaDir: File,
-+  ) {
-+    val retriever = MediaMetadataRetriever()
-+    try {
-+      setDataSource(retriever, path, headers)
-+      val metadataDuration =
-+        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-+          ?.toLongOrNull()
-+          ?.takeIf { it > 0L }
-+          ?.div(1000f)
-+      val duration = metadataDuration ?: durationHintSeconds?.takeIf { it.isFinite() && it > 0f } ?: return
-+      val count = frameCount(duration)
-+      val positions = samplePositions(duration, count)
-+      mediaDir.mkdirs()
-+      countFile(mediaDir).writeText(count.toString())
-+
-+      for (index in progressiveOrder(count)) {
-+        currentCoroutineContext().ensureActive()
-+        if (activeKey != key) return
-+        val output = frameFile(mediaDir, index)
-+        if (output.exists()) continue
-+        val positionUs = (positions[index] * 1_000_000L).toLong()
-+        val bitmap =
-+          runCatching {
-+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-+              retriever.getScaledFrameAtTime(
-+                positionUs,
-+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-+                PREVIEW_WIDTH,
-+                PREVIEW_HEIGHT,
-+              )
-+            } else {
-+              retriever.getFrameAtTime(positionUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-+                ?.scaleToThumbnailMax(PREVIEW_WIDTH)
-+            }
-+          }.getOrNull() ?: continue
-+        currentCoroutineContext().ensureActive()
-+        if (activeKey != key) return
-+        try {
-+          val bytes = ByteArrayOutputStream().use { encoded ->
-+            if (bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, encoded)) encoded.toByteArray() else null
-+          }
-+          if (bytes != null && bytes.size <= MAX_FRAME_BYTES) output.writeBytes(bytes)
-+        } finally {
-+          bitmap.recycle()
-+        }
-+        if (output.exists()) _cacheRevision.value++
-+      }
-+
-+      if (activeKey == key && (0 until count).all { frameFile(mediaDir, it).exists() }) {
-+        completeFile(mediaDir).writeText("")
-+      }
-+    } catch (error: Throwable) {
-+      if (error is CancellationException) throw error
-+      // A preview failure must never affect primary playback.
-+    } finally {
-+      runCatching { retriever.release() }
-+      if (activeKey == key) pruneOldCaches(key)
-+    }
-+  }
-+
-+  private fun setDataSource(
-+    retriever: MediaMetadataRetriever,
-+    path: String,
-+    headers: Map<String, String>,
-+  ) {
-+    val uri = Uri.parse(path)
-+    when (uri.scheme?.lowercase()) {
-+      "content", "android.resource" -> retriever.setDataSource(context, uri)
-+      "file" -> retriever.setDataSource(uri.path ?: path)
-+      "http", "https" -> retriever.setDataSource(path, headers)
-+      else -> retriever.setDataSource(path)
-+    }
-+  }
-+
-+  private fun nearestAvailableIndex(directory: File, preferred: Int, count: Int): Int? {
-+    if (frameFile(directory, preferred).exists()) return preferred
-+    for (distance in 1 until count) {
-+      val before = preferred - distance
-+      if (before >= 0 && frameFile(directory, before).exists()) return before
-+      val after = preferred + distance
-+      if (after < count && frameFile(directory, after).exists()) return after
-+    }
-+    return null
-+  }
-+
-+  private fun pruneOldCaches(currentKey: String) {
-+    cacheDir.listFiles()
-+      ?.filter { it.isDirectory && it.name != currentKey }
-+      ?.sortedByDescending { it.lastModified() }
-+      ?.drop(MAX_RETAINED_CACHES - 1)
-+      ?.forEach { it.deleteRecursively() }
-+  }
-+
-+  private fun cacheKey(path: String, source: String, headers: Map<String, String>): String {
-+    val sourceUri = Uri.parse(source)
-+    val localFile = when (sourceUri.scheme?.lowercase()) {
-+      null -> File(source)
-+      "file" -> sourceUri.path?.let(::File)
-+      else -> null
-+    }
-+    val localIdentity = localFile?.takeIf { it.exists() }?.let { "${it.length()}|${it.lastModified()}" }.orEmpty()
-+    val headerIdentity = headers.entries
-+      .sortedBy { it.key.lowercase() }
-+      .joinToString("|") { "${it.key.lowercase()}:${it.value}" }
-+    val identity = "$path|$source|$localIdentity|$headerIdentity|$CACHE_VERSION"
-+    val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
-+    return digest.take(16).joinToString("") { "%02x".format(it) }
-+  }
-+
-+  private fun frameFile(directory: File, index: Int) = File(directory, "%03d.jpg".format(index))
-+
-+  private fun countFile(directory: File) = File(directory, COUNT_FILE)
-+
-+  private fun completeFile(directory: File) = File(directory, COMPLETE_FILE)
-+
-+  companion object {
-+    private const val CACHE_VERSION = 3
-+    private const val COUNT_FILE = ".count"
-+    private const val COMPLETE_FILE = ".complete"
-+    private const val PREVIEW_WIDTH = 160
-+    private const val PREVIEW_HEIGHT = 90
-+    private const val JPEG_QUALITY = 25
-+    private const val MAX_FRAME_BYTES = 48 * 1024
-+    private const val MEMORY_CACHE_BYTES = 2 * 1024 * 1024
-+    private const val MAX_RETAINED_CACHES = 3
-+    private const val NETWORK_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000L
-+    private const val MIN_FRAME_COUNT = 12
-+    private const val MAX_FRAME_COUNT = 32
-+
-+    internal fun frameCount(durationSeconds: Float): Int =
-+      ceil(durationSeconds / 300f).toInt().coerceIn(MIN_FRAME_COUNT, MAX_FRAME_COUNT)
-+
-+    internal fun samplePositions(durationSeconds: Float, count: Int): List<Float> {
-+      if (count <= 1) return listOf(0f)
-+      val lastPosition = (durationSeconds - 0.25f).coerceAtLeast(0f)
-+      return List(count) { index -> lastPosition * index / (count - 1) }
-+    }
-+
-+    internal fun nearestFrameIndex(positionSeconds: Float, durationSeconds: Float, count: Int): Int {
-+      if (durationSeconds <= 0f || count <= 1) return 0
-+      return ((positionSeconds / durationSeconds).coerceIn(0f, 1f) * (count - 1)).roundToInt()
-+    }
-+
-+    internal fun progressiveOrder(count: Int): List<Int> {
-+      if (count <= 0) return emptyList()
-+      val result = mutableListOf<Int>()
-+      val queue = ArrayDeque<IntRange>()
-+      queue.add(0 until count)
-+      while (queue.isNotEmpty()) {
-+        val range = queue.removeFirst()
-+        if (range.isEmpty()) continue
-+        val middle = (range.first + range.last) / 2
-+        result += middle
-+        if (range.first < middle) queue.add(range.first until middle)
-+        if (middle < range.last) queue.add((middle + 1)..range.last)
-+      }
-+      return result
-+    }
-+  }
-+}
-+
-+private fun File.readTextOrNull(): String? = runCatching { readText() }.getOrNull()
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt b/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt
 index 373ea5b..1138577 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/preferences/AppearancePreferences.kt
@@ -37151,10 +36856,10 @@ index 373ea5b..1138577 100644
    val bottomLeftControls =
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/preferences/ExtraPreferences.kt b/app/src/main/kotlin/xyz/mpv/rex/preferences/ExtraPreferences.kt
 new file mode 100644
-index 0000000..9b0cada
+index 0000000..5f9895a
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/preferences/ExtraPreferences.kt
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,15 @@
 +package xyz.mpv.rex.preferences
 +
 +import xyz.mpv.rex.preferences.preference.PreferenceStore
@@ -37163,6 +36868,8 @@ index 0000000..9b0cada
 +  preferenceStore: PreferenceStore,
 +) {
 +  val autoStremioSubtitles = preferenceStore.getBoolean("sub_auto_stremio", true)
++  val maximumBufferedSeconds = preferenceStore.getInt("maximum_buffered_seconds", 180)
++  val maximumNetworkDownloadMiB = preferenceStore.getInt("maximum_network_download_mib", 200)
 +  val streamInfoRefreshSeconds = preferenceStore.getInt("stream_info_refresh_seconds", 1)
 +  val pingHost = preferenceStore.getString("ping_host", "google.com")
 +  val autoLocalSubtitles = preferenceStore.getBoolean("auto_local_subtitles", false)
@@ -37408,10 +37115,14 @@ index 0000000..0952b27
 +  }
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
-index a7a5287..594f7ef 100644
+index a7a5287..2ba9385 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
-@@ -17,6 +17,7 @@ import xyz.mpv.rex.preferences.PlayerPreferences
+@@ -14,9 +14,11 @@ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
+ import xyz.mpv.rex.R
+ import xyz.mpv.rex.preferences.PlayerPreferences
++import xyz.mpv.rex.preferences.ExtraPreferences
  import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
  import xyz.mpv.rex.utils.history.RecentlyPlayedOps
  import xyz.mpv.rex.utils.media.MediaThumbnailUtils
@@ -37419,11 +37130,23 @@ index a7a5287..594f7ef 100644
  import `is`.xyz.mpv.MPVLib
  import `is`.xyz.mpv.MPVNode
  import org.koin.core.component.KoinComponent
-@@ -285,6 +286,7 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
+@@ -44,6 +46,7 @@ import java.io.File
+ class HeadlessPlaybackController(private val appContext: Context) : KoinComponent {
+   private val miniPlayerStateManager: MiniPlayerStateManager by inject()
+   private val playerPreferences: PlayerPreferences by inject()
++  private val extraPreferences: ExtraPreferences by inject()
+ 
+   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+ 
+@@ -285,6 +288,11 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
      activeTitle = title
  
      val playable = uri.resolveUri(appContext) ?: uri.toString()
-+    StreamTuning.applyTuningForUri(playable)
++    StreamTuning.applyTuningForUri(
++      playable,
++      extraPreferences.maximumNetworkDownloadMiB.get(),
++      extraPreferences.maximumBufferedSeconds.get(),
++    )
      runCatching { MPVLib.command("loadfile", playable) }
      runCatching { MPVLib.setPropertyBoolean("pause", false) }
  
@@ -37473,7 +37196,7 @@ index 00c28bf..3141718 100644
      // App will handle track selection manually via TrackSelector to respect user choices
      MPVLib.setOptionString("slang", "")
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
-index 09ac607..ab79391 100644
+index 09ac607..65e680c 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
 @@ -43,6 +43,7 @@ import xyz.mpv.rex.domain.playbackstate.repository.PlaybackStateRepository
@@ -37500,17 +37223,16 @@ index 09ac607..ab79391 100644
  import xyz.mpv.rex.ui.player.SingleActionGesture
  import com.github.k1rakishou.fsaf.FileManager
  import `is`.xyz.mpv.MPVLib
-@@ -152,6 +155,9 @@ class PlayerActivity :
+@@ -152,6 +155,8 @@ class PlayerActivity :
     */
    private val subtitlesPreferences: SubtitlesPreferences by inject()
  
 +  private val extraPreferences: ExtraPreferences by inject()
-+  private val seekPreviewRepository: xyz.mpv.rex.domain.thumbnail.SeekPreviewRepository by inject()
 +
    /**
     * Preferences for advanced settings.
     */
-@@ -217,6 +223,7 @@ class PlayerActivity :
+@@ -217,6 +222,7 @@ class PlayerActivity :
     * For network streams, this includes a hash of the URI to ensure uniqueness.
     */
    private var mediaIdentifier = ""
@@ -37518,7 +37240,7 @@ index 09ac607..ab79391 100644
  
    /**
     * Helper for managing Picture-in-Picture mode.
-@@ -232,6 +239,8 @@ class PlayerActivity :
+@@ -232,6 +238,8 @@ class PlayerActivity :
    private var mpvInitialized = false // Track MPV initialization state
    private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
    private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
@@ -37527,7 +37249,7 @@ index 09ac607..ab79391 100644
    private var lastVid = -1 // Track video track for background playback optimization
    private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
    private var inheritedNativeSession = false // MPV ownership came from HeadlessPlaybackController
-@@ -347,6 +356,8 @@ class PlayerActivity :
+@@ -347,6 +355,8 @@ class PlayerActivity :
      setContentView(binding.root)
  
      pendingIntentExtras = true
@@ -37536,7 +37258,7 @@ index 09ac607..ab79391 100644
      // The headless controller may retain MPV idle after its mini player is closed. Always take
      // ownership before initializing so a normal video launch cannot create the global singleton
      // a second time.
-@@ -357,6 +368,9 @@ class PlayerActivity :
+@@ -357,6 +367,9 @@ class PlayerActivity :
        setupMPV()
      }
      viewModel.onMpvCoreInitialized()
@@ -37546,7 +37268,7 @@ index 09ac607..ab79391 100644
      MediaPlaybackService.createNotificationChannel(this)
      setupAudio()
      setupBackPressHandler()
-@@ -460,7 +474,7 @@ class PlayerActivity :
+@@ -460,7 +473,7 @@ class PlayerActivity :
        val mpvTitle = runCatching { MPVLib.getPropertyString("media-title") }.getOrNull()
        fileName = if (!mpvTitle.isNullOrBlank()) mpvTitle else (intent.data?.lastPathSegment ?: "Unknown Video")
      }
@@ -37555,7 +37277,7 @@ index 09ac607..ab79391 100644
  
      // Set HTTP headers (including referer) BEFORE playing the file
      setHttpHeadersFromExtras(intent.extras)
-@@ -473,6 +487,7 @@ class PlayerActivity :
+@@ -473,6 +486,7 @@ class PlayerActivity :
      val isAlreadyPlayingCurrent = !hasPlayableMediaInIntent && !currentMpvPath.isNullOrBlank() && currentMpvPath != "null"
  
      if (hasPlayableMediaInIntent) {
@@ -37563,24 +37285,15 @@ index 09ac607..ab79391 100644
        if (isManualBackgroundPlayback || isInBackgroundPlayback) {
          isManualBackgroundPlayback = false
          endBackgroundPlayback()
-@@ -485,6 +500,8 @@ class PlayerActivity :
+@@ -485,6 +499,7 @@ class PlayerActivity :
          if (playerPreferences.savePositionOnQuit.get()) {
            runCatching { MPVLib.setPropertyBoolean("pause", true) }
          }
 +        applyStreamTuning(playableUri)
-+        prepareSeekPreviews(playableUri, extractUriFromIntent(intent)?.toString(), intent.extras)
          player.playFile(playableUri)
        }
      } else if (isAlreadyPlayingCurrent) {
-@@ -702,6 +719,7 @@ class PlayerActivity :
-   @RequiresApi(Build.VERSION_CODES.P)
-   override fun onDestroy() {
-     Log.d(TAG, "PlayerActivity onDestroy")
-+    seekPreviewRepository.cancel()
- 
-     runCatching {
-       // Only stop the service if we're not doing manual background playback
-@@ -1188,14 +1206,33 @@ class PlayerActivity :
+@@ -1188,14 +1203,33 @@ class PlayerActivity :
    private fun setIntentExtras(extras: Bundle?) {
      if (extras == null) return
  
@@ -37615,7 +37328,7 @@ index 09ac607..ab79391 100644
    /**
     * Adds subtitle tracks from intent extras.
     *
-@@ -1206,15 +1243,32 @@ class PlayerActivity :
+@@ -1206,15 +1240,32 @@ class PlayerActivity :
     * @param extras Bundle containing subtitle URIs
     */
    private fun addSubtitlesFromExtras(extras: Bundle) {
@@ -37653,7 +37366,7 @@ index 09ac607..ab79391 100644
  
          Log.v(TAG, "Adding subtitles from intent extras: $subfile")
          MPVLib.command("sub-add", subfile, flag)
-@@ -1222,6 +1276,75 @@ class PlayerActivity :
+@@ -1222,6 +1273,79 @@ class PlayerActivity :
      }
    }
  
@@ -37723,13 +37436,17 @@ index 09ac607..ab79391 100644
 +  }
 +
 +  private fun applyStreamTuning(uri: String?) {
-+    StreamTuning.applyTuningForUri(uri)
++    StreamTuning.applyTuningForUri(
++      uri = uri,
++      maximumDownloadMiB = extraPreferences.maximumNetworkDownloadMiB.get(),
++      maximumBufferedSeconds = extraPreferences.maximumBufferedSeconds.get(),
++    )
 +  }
 +
    /**
     * Sets HTTP headers from intent extras for network playback.
     *
-@@ -1290,12 +1413,32 @@ class PlayerActivity :
+@@ -1290,7 +1414,7 @@ class PlayerActivity :
          .joinToString(",")
  
        safeSetPropertyString("http-header-fields", headersString)
@@ -37738,32 +37455,7 @@ index 09ac607..ab79391 100644
      } else {
        safeSetPropertyString("http-header-fields", "")
        Log.d(TAG, "Cleared HTTP headers")
-     }
-   }
-+
-+  private fun prepareSeekPreviews(
-+    uri: String,
-+    sourceUri: String? = null,
-+    extras: Bundle? = null,
-+    durationHintSeconds: Float? = null,
-+  ) {
-+    val headers = java.util.TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
-+    val parsedUri = runCatching { Uri.parse(uri) }.getOrNull()
-+    if (HttpUtils.isNetworkStream(parsedUri)) {
-+      HttpUtils.extractRefererDomain(parsedUri)?.let { headers["Referer"] = it }
-+    }
-+    extras?.getStringArray("headers")
-+      ?.asSequence()
-+      ?.chunked(2)
-+      ?.filter { it.size == 2 && !it[0].isNullOrBlank() && !it[1].isNullOrBlank() }
-+      ?.forEach { (key, value) -> headers[key!!] = value!! }
-+
-+    seekPreviewRepository.prepare(uri, sourceUri ?: uri, headers, durationHintSeconds)
-+  }
-   /**
-    * Sets HTTP headers for a specific URI (used for playlist items).
-    * Automatically extracts and sets the Referer header based on the URI origin.
-@@ -1338,12 +1481,15 @@ class PlayerActivity :
+@@ -1338,12 +1462,15 @@ class PlayerActivity :
     * @param intent The intent containing the file URI
     * @return The resolved file path, or null if not found
     */
@@ -37781,7 +37473,7 @@ index 09ac607..ab79391 100644
  
    /**
     * Parses the file path from a SEND intent.
-@@ -1559,11 +1705,26 @@ class PlayerActivity :
+@@ -1559,11 +1686,26 @@ class PlayerActivity :
        return
      }
  
@@ -37809,7 +37501,7 @@ index 09ac607..ab79391 100644
          if (state?.savedOrientation != null && state.savedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
            withContext(Dispatchers.Main) {
              requestedOrientation = state.savedOrientation!!
-@@ -1852,10 +2013,10 @@ class PlayerActivity :
+@@ -1852,10 +1994,10 @@ class PlayerActivity :
        if (fileName.isBlank()) {
          fileName = intent.data?.lastPathSegment ?: "Unknown Video"
        }
@@ -37822,7 +37514,7 @@ index 09ac607..ab79391 100644
      }
  
      // Start media notification service only when going to background (like stock mpv-android)
-@@ -1902,6 +2063,7 @@ class PlayerActivity :
+@@ -1902,6 +2044,7 @@ class PlayerActivity :
      lifecycleScope.launch(Dispatchers.IO) {
        // Load playback state (will skip track restoration if preferred language configured)
        val hasState = loadVideoPlaybackState(fileName)
@@ -37830,7 +37522,7 @@ index 09ac607..ab79391 100644
  
        // Re-enable the video/album-art track when loading a file in the foreground.
        // onNewIntent loads new files with vid="no"; if we're not in background
-@@ -1925,7 +2087,8 @@ class PlayerActivity :
+@@ -1925,7 +2068,8 @@ class PlayerActivity :
        }
  
        // Apply track selection logic (defaults only apply when no saved state)
@@ -37840,7 +37532,7 @@ index 09ac607..ab79391 100644
  
        // Apply default zoom only if there's no saved state
        if (!hasState) {
-@@ -2280,6 +2443,7 @@ class PlayerActivity :
+@@ -2280,6 +2424,7 @@ class PlayerActivity :
     */
    private fun saveVideoPlaybackState(mediaTitle: String) {
      val identifier = mediaIdentifier
@@ -37848,7 +37540,7 @@ index 09ac607..ab79391 100644
      if (identifier.isBlank()) return
  
      // Capture current playback state before switching files
-@@ -2304,6 +2468,8 @@ class PlayerActivity :
+@@ -2304,6 +2449,8 @@ class PlayerActivity :
      savePlaybackStateJob = lifecycleScope.launch(Dispatchers.IO) {
        runCatching {
          val oldState = playbackStateRepository.getVideoDataByTitle(identifier)
@@ -37857,7 +37549,7 @@ index 09ac607..ab79391 100644
          Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $identifier) at position: $currentPos")
  
          val watchedThreshold = browserPreferences.watchedThreshold.get()
-@@ -2357,6 +2523,7 @@ class PlayerActivity :
+@@ -2357,6 +2504,7 @@ class PlayerActivity :
              },
            ),
          )
@@ -37865,7 +37557,7 @@ index 09ac607..ab79391 100644
        }.onFailure { e ->
          Log.e(TAG, "Error saving playback state", e)
        }
-@@ -2369,10 +2536,14 @@ class PlayerActivity :
+@@ -2369,10 +2517,14 @@ class PlayerActivity :
     * @return true if saved state was found and applied, false otherwise
     */
    private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
@@ -37880,7 +37572,7 @@ index 09ac607..ab79391 100644
  
        applyPlaybackState(state)
        applyDefaultSettings(state)
-@@ -2394,7 +2565,9 @@ class PlayerActivity :
+@@ -2394,7 +2546,9 @@ class PlayerActivity :
    private suspend fun applyPlaybackState(state: PlaybackStateEntity?) {
      if (state == null) {
        // Force reset position for new items in playlist
@@ -37891,7 +37583,7 @@ index 09ac607..ab79391 100644
        return
      }
  
-@@ -2458,10 +2631,14 @@ class PlayerActivity :
+@@ -2458,10 +2612,14 @@ class PlayerActivity :
      MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
      viewModel.setVideoZoom(state.videoZoom)
  
@@ -37909,7 +37601,7 @@ index 09ac607..ab79391 100644
      }
    }
  
-@@ -2511,6 +2688,9 @@ class PlayerActivity :
+@@ -2511,6 +2669,9 @@ class PlayerActivity :
      super.onNewIntent(intent)
  
      pendingIntentExtras = true
@@ -37919,7 +37611,7 @@ index 09ac607..ab79391 100644
      // Update the intent first so getFileName uses the new intent data
      setIntent(intent)
  
-@@ -2526,6 +2706,8 @@ class PlayerActivity :
+@@ -2526,6 +2687,8 @@ class PlayerActivity :
      if (isReady && (incomingUri == null || (isSameMedia && !isInBackgroundPlayback && !isManualBackgroundPlayback))) {
        Log.d(TAG, "onNewIntent: current media already playing or expanding active session, restoring player without reload")
        enableVideoAfterBackground()
@@ -37928,7 +37620,7 @@ index 09ac607..ab79391 100644
        @Suppress("DEPRECATION")
        overridePendingTransition(android.R.anim.fade_in, 0)
        return
-@@ -2622,7 +2804,7 @@ class PlayerActivity :
+@@ -2622,7 +2785,7 @@ class PlayerActivity :
      if (fileName.isBlank()) {
        fileName = intent.data?.lastPathSegment ?: "Unknown Video"
      }
@@ -37937,7 +37629,7 @@ index 09ac607..ab79391 100644
  
      // Synchronously set orientation for the new file before displaying activity
      applyInitialOrientationFromIntent(intent)
-@@ -2632,6 +2814,7 @@ class PlayerActivity :
+@@ -2632,6 +2795,7 @@ class PlayerActivity :
  
      // Load the new file
      getPlayableUri(intent)?.let { uriStr ->
@@ -37945,16 +37637,15 @@ index 09ac607..ab79391 100644
        val parsedUri = runCatching { Uri.parse(uriStr) }.getOrNull()
        val fastDurationMs = if (parsedUri != null) getFastDurationMsForUri(parsedUri) else 0L
        val fastDurationSec = if (fastDurationMs > 0L) fastDurationMs / 1000f else null
-@@ -2645,6 +2828,8 @@ class PlayerActivity :
+@@ -2645,6 +2809,7 @@ class PlayerActivity :
          }
          // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
          lifecycleScope.launch(Dispatchers.Default) {
 +          applyStreamTuning(uriStr)
-+          prepareSeekPreviews(uriStr, extractUriFromIntent(intent)?.toString(), intent.extras, fastDurationSec)
            MPVLib.command("loadfile", uriStr)
          }
        }
-@@ -3571,6 +3756,7 @@ class PlayerActivity :
+@@ -3571,6 +3736,7 @@ class PlayerActivity :
  
      val uri = playlist[index]
      val playableUri = uri.resolveUri(this) ?: uri.toString()
@@ -37962,7 +37653,7 @@ index 09ac607..ab79391 100644
  
      // Update index in manager
      viewModel.playlistManager.updateIndex(index)
-@@ -3579,7 +3765,7 @@ class PlayerActivity :
+@@ -3579,7 +3745,7 @@ class PlayerActivity :
      val customTitle = viewModel.playlistManager.getTitleAt(index)
      fileName = if (!customTitle.isNullOrBlank()) customTitle else getFileNameFromUri(uri)
      // Generate new media identifier for playback state
@@ -37971,34 +37662,23 @@ index 09ac607..ab79391 100644
  
      val cachedDurationMs = viewModel.playlistManager.getDurationAt(index)
      val fastDurationMs = if (cachedDurationMs > 0L) cachedDurationMs else getFastDurationMsForUri(uri)
-@@ -3653,6 +3839,13 @@ class PlayerActivity :
+@@ -3653,6 +3819,7 @@ class PlayerActivity :
      // Load the new video
      // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
      lifecycleScope.launch(Dispatchers.Default) {
 +      applyStreamTuning(playableUri)
-+      prepareSeekPreviews(
-+        playableUri,
-+        sourceUri = uri.toString(),
-+        extras = intent.extras,
-+        durationHintSeconds = fastDurationSec,
-+      )
        MPVLib.command("loadfile", playableUri)
      }
  
-@@ -3844,9 +4037,12 @@ class PlayerActivity :
+@@ -3844,6 +4011,7 @@ class PlayerActivity :
            }
            if (mpvInitialized) {
              lifecycleScope.launch(Dispatchers.Default) {
 +              applyStreamTuning(uriStr)
-+              prepareSeekPreviews(uriStr, extractUriFromIntent(intent)?.toString(), intent.extras)
                MPVLib.command("loadfile", uriStr)
              }
            } else {
-+            prepareSeekPreviews(uriStr, extractUriFromIntent(intent)?.toString(), intent.extras)
-             player.playFile(uriStr)
-           }
-         }
-@@ -3872,7 +4068,7 @@ class PlayerActivity :
+@@ -3872,7 +4040,7 @@ class PlayerActivity :
    /**
     * Generate a unique identifier for this media for playback state/history.
     *
@@ -38007,7 +37687,7 @@ index 09ac607..ab79391 100644
     * For network streams via proxy (SMB/WebDAV/FTP), uses the stable network file path from intent extras.
     * For other network URIs (http/https/rtmp/etc.), uses a hash of the URI string to distinguish different streams.
     */
-@@ -3893,29 +4089,56 @@ class PlayerActivity :
+@@ -3893,29 +4061,56 @@ class PlayerActivity :
      }
  
      val uri = extractUriFromIntent(intent)
@@ -38070,7 +37750,7 @@ index 09ac607..ab79391 100644
    private fun generatePlaylistFromMediaLibrary(currentPath: String) {
      lifecycleScope.launch(Dispatchers.IO) {
        runCatching {
-@@ -3985,7 +4208,7 @@ class PlayerActivity :
+@@ -3985,7 +4180,7 @@ class PlayerActivity :
      /**
       * Constant used when playback position is not set.
       */
@@ -38766,7 +38446,7 @@ index 7a195af..7c138d3 100644
  }
 -
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
-index 46fe72b..947619a 100644
+index 46fe72b..b65b34a 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 @@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
@@ -38920,17 +38600,7 @@ index 46fe72b..947619a 100644
            }
  
            SeekbarWithTimers(
-@@ -1286,7 +1338,8 @@ fun PlayerControls(
-             loopStart = abLoopA?.toFloat(),
-             loopEnd = abLoopB?.toFloat(),
-             isGestureSeeking = isGestureSeeking,
--            isCancelActive = isCloseToStart
-+            isCancelActive = isCloseToStart,
-+            previewPath = mediaPath,
-           )
-         }
- 
-@@ -1884,3 +1937,64 @@ fun PlayerControls(
+@@ -1884,3 +1936,64 @@ fun PlayerControls(
    }
  }
  
@@ -39099,161 +38769,12 @@ index 1c39a0b..e813caf 100644
      )
  }
 -
-diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/components/Seekbar.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/components/Seekbar.kt
-index deaa4ad..4a4fe38 100644
---- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/components/Seekbar.kt
-+++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/components/Seekbar.kt
-@@ -12,17 +12,21 @@ import androidx.compose.animation.core.animateFloat
- import androidx.compose.animation.core.infiniteRepeatable
- import androidx.compose.animation.core.RepeatMode
- import androidx.compose.foundation.Canvas
-+import androidx.compose.foundation.Image
- import androidx.compose.foundation.clickable
- import androidx.compose.foundation.gestures.detectDragGestures
- import androidx.compose.foundation.gestures.detectTapGestures
- import androidx.compose.foundation.interaction.MutableInteractionSource
- import androidx.compose.foundation.layout.Arrangement
- import androidx.compose.foundation.layout.Box
-+import androidx.compose.foundation.layout.BoxWithConstraints
- import androidx.compose.foundation.layout.Row
- import androidx.compose.foundation.layout.fillMaxHeight
- import androidx.compose.foundation.layout.fillMaxWidth
- import androidx.compose.foundation.layout.fillMaxSize
- import androidx.compose.foundation.layout.padding
-+import androidx.compose.foundation.layout.offset
-+import androidx.compose.foundation.layout.requiredHeight
- import androidx.compose.foundation.layout.height
- import androidx.compose.foundation.layout.width
- import androidx.compose.foundation.layout.wrapContentHeight
-@@ -50,6 +54,7 @@ import androidx.compose.ui.Alignment
- import androidx.compose.ui.Modifier
- import androidx.compose.ui.geometry.Offset
- import androidx.compose.ui.graphics.Color
-+import androidx.compose.ui.graphics.asImageBitmap
- import androidx.compose.ui.graphics.Path
- import androidx.compose.ui.graphics.StrokeCap
- import androidx.compose.ui.graphics.drawscope.Stroke
-@@ -57,6 +62,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
- import androidx.compose.ui.graphics.drawscope.withTransform
- import androidx.compose.ui.graphics.Brush
- import androidx.compose.ui.input.pointer.pointerInput
-+import androidx.compose.ui.layout.ContentScale
- import androidx.compose.ui.text.style.TextAlign
- import androidx.compose.ui.tooling.preview.Preview
- import androidx.compose.ui.unit.dp
-@@ -79,6 +85,7 @@ import xyz.mpv.rex.preferences.PlayerPreferences
- import org.koin.compose.koinInject
- import xyz.mpv.rex.preferences.GesturePreferences
- import xyz.mpv.rex.preferences.preference.collectAsState
-+import xyz.mpv.rex.domain.thumbnail.SeekPreviewRepository
- 
- @Composable
- fun SeekbarWithTimers(
-@@ -97,11 +104,31 @@ fun SeekbarWithTimers(
-   loopEnd: Float? = null,
-   isGestureSeeking: Boolean = false,
-   isCancelActive: Boolean = false,
-+  previewPath: String? = null,
-   modifier: Modifier = Modifier,
- ) {
-   val clickEvent = LocalPlayerButtonsClickEvent.current
-   var isUserInteracting by remember { mutableStateOf(false) }
-   var userPosition by remember { mutableFloatStateOf(position()) }
-+  val previewRepository = koinInject<SeekPreviewRepository>()
-+  val previewRevision by previewRepository.cacheRevision.collectAsState()
-+  var previewBitmap by remember(previewPath) { mutableStateOf<android.graphics.Bitmap?>(null) }
-+  val previewAlpha = remember { Animatable(0f) }
-+
-+  LaunchedEffect(previewPath, duration, userPosition, isUserInteracting, previewRevision) {
-+    if (isUserInteracting && previewPath != null && duration > 0f) {
-+      previewBitmap = previewRepository.frameAt(previewPath, duration, userPosition)
-+    }
-+  }
-+
-+  LaunchedEffect(isUserInteracting, previewBitmap) {
-+    if (isUserInteracting && previewBitmap != null) {
-+      previewAlpha.animateTo(1f, tween(100))
-+    } else if (!isUserInteracting) {
-+      delay(350)
-+      previewAlpha.animateTo(0f, tween(250))
-+    }
-+  }
- 
-   // Animated position for smooth transitions
-   val animatedPosition = remember { Animatable(position()) }
-@@ -215,18 +242,52 @@ fun SeekbarWithTimers(
-     )
- 
-     // Seekbar
--    Box(
-+    BoxWithConstraints(
-       modifier =
-         Modifier
-           .weight(1f)
--          .height(48.dp)
--          .graphicsLayer {
--            scaleY = squeezeScale
--          },
-+          .height(48.dp),
-       contentAlignment = Alignment.Center,
-     ) {
-+      if (previewBitmap != null && previewAlpha.value > 0f && duration > 0f) {
-+        val previewWidth = minOf(maxWidth, 160.dp)
-+        val progress = (userPosition / duration).coerceIn(0f, 1f)
-+        val previewX = (maxWidth * progress - previewWidth / 2).coerceIn(0.dp, maxWidth - previewWidth)
-+        Box(
-+          modifier =
-+            Modifier
-+              .align(Alignment.TopStart)
-+              .offset(x = previewX, y = (-104).dp)
-+              .width(previewWidth)
-+              .requiredHeight(96.dp)
-+              .graphicsLayer { alpha = previewAlpha.value }
-+              .background(Color.Black, RoundedCornerShape(6.dp))
-+              .padding(2.dp),
-+        ) {
-+          Image(
-+            bitmap = previewBitmap!!.asImageBitmap(),
-+            contentDescription = null,
-+            contentScale = ContentScale.Crop,
-+            modifier = Modifier.fillMaxSize(),
-+          )
-+          Text(
-+            text = Utils.prettyTime(userPosition.toInt(), false),
-+            color = Color.White,
-+            style = MaterialTheme.typography.labelMedium,
-+            modifier =
-+              Modifier
-+                .align(Alignment.BottomCenter)
-+                .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(3.dp))
-+                .padding(horizontal = 6.dp, vertical = 2.dp),
-+          )
-+        }
-+      }
- 
--      when (seekbarStyle) {
-+      Box(
-+        modifier = Modifier.fillMaxSize().graphicsLayer { scaleY = squeezeScale },
-+        contentAlignment = Alignment.Center,
-+      ) {
-+        when (seekbarStyle) {
-         SeekbarStyle.Standard -> {
-           StandardSeekbar(
-             position = { if (isUserInteracting) userPosition else animatedPosition.value },
-@@ -342,6 +403,7 @@ fun SeekbarWithTimers(
-           )
-         }
- 
-+        }
-       }
-     }
- 
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/ExtraPreferencesScreen.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/ExtraPreferencesScreen.kt
 new file mode 100644
-index 0000000..c474656
+index 0000000..fded484
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/ExtraPreferencesScreen.kt
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,352 @@
 +package xyz.mpv.rex.ui.preferences
 +
 +import android.content.Intent
@@ -39313,6 +38834,8 @@ index 0000000..c474656
 +    val backStack = LocalBackStack.current
 +    val preferences = koinInject<ExtraPreferences>()
 +    val autoStremioSubtitles by preferences.autoStremioSubtitles.collectAsState()
++    val maximumBufferedSeconds by preferences.maximumBufferedSeconds.collectAsState()
++    val maximumNetworkDownloadMiB by preferences.maximumNetworkDownloadMiB.collectAsState()
 +    val streamInfoRefreshSeconds by preferences.streamInfoRefreshSeconds.collectAsState()
 +    val pingHost by preferences.pingHost.collectAsState()
 +    val autoLocalSubtitles by preferences.autoLocalSubtitles.collectAsState()
@@ -39389,6 +38912,42 @@ index 0000000..c474656
 +                onValueChange = preferences.autoStremioSubtitles::set,
 +                title = { Text(stringResource(R.string.pref_subtitles_auto_stremio_title)) },
 +                summary = { Text(stringResource(R.string.pref_subtitles_auto_stremio_summary)) },
++              )
++              PreferenceDivider()
++              ValuePreference(
++                title = stringResource(R.string.pref_extra_maximum_buffered_seconds_title),
++                summary = if (maximumBufferedSeconds == 0) {
++                  stringResource(R.string.pref_extra_time_threshold_disabled)
++                } else {
++                  stringResource(R.string.pref_extra_seconds_value, maximumBufferedSeconds)
++                },
++                onClick = {
++                  numberDialog =
++                    NumberSetting(
++                      R.string.pref_extra_maximum_buffered_seconds_title,
++                      maximumBufferedSeconds,
++                      0,
++                      preferences.maximumBufferedSeconds::set,
++                    )
++                },
++              )
++              PreferenceDivider()
++              ValuePreference(
++                title = stringResource(R.string.pref_extra_maximum_network_download_title),
++                summary = if (maximumNetworkDownloadMiB == 0) {
++                  stringResource(R.string.pref_extra_size_threshold_disabled)
++                } else {
++                  stringResource(R.string.pref_extra_mib_value, maximumNetworkDownloadMiB)
++                },
++                onClick = {
++                  numberDialog =
++                    NumberSetting(
++                      R.string.pref_extra_maximum_network_download_title,
++                      maximumNetworkDownloadMiB,
++                      0,
++                      preferences.maximumNetworkDownloadMiB::set,
++                    )
++                },
 +              )
 +              PreferenceDivider()
 +              ValuePreference(
@@ -39608,17 +39167,17 @@ index 5d00c29..779066d 100644
                
                Preference(
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SearchablePreference.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SearchablePreference.kt
-index de16e42..8c56a8d 100644
+index de16e42..b474dcc 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SearchablePreference.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SearchablePreference.kt
-@@ -597,6 +597,39 @@ object SearchablePreferences {
+@@ -597,6 +597,51 @@ object SearchablePreferences {
                  category = "Advanced",
                  screen = AdvancedPreferencesScreen,
              ))
 +            add(SearchablePreference(
 +                titleRes = R.string.pref_extra_settings_title,
 +                summaryRes = R.string.pref_extra_settings_summary,
-+                keywords = listOf("extra", "network", "ping", "local subtitles"),
++                keywords = listOf("extra", "buffer", "network", "ping", "local subtitles"),
 +                category = "Advanced",
 +                screen = ExtraPreferencesScreen,
 +            ))
@@ -39626,6 +39185,18 @@ index de16e42..8c56a8d 100644
 +                titleRes = R.string.pref_subtitles_auto_stremio_title,
 +                summaryRes = R.string.pref_subtitles_auto_stremio_summary,
 +                keywords = listOf("stremio", "automatic", "download", "subtitles"),
++                category = "Extra Settings",
++                screen = ExtraPreferencesScreen,
++            ))
++            add(SearchablePreference(
++                titleRes = R.string.pref_extra_maximum_buffered_seconds_title,
++                keywords = listOf("buffer", "cache", "seconds", "streaming"),
++                category = "Extra Settings",
++                screen = ExtraPreferencesScreen,
++            ))
++            add(SearchablePreference(
++                titleRes = R.string.pref_extra_maximum_network_download_title,
++                keywords = listOf("network", "download", "limit", "mib"),
 +                category = "Extra Settings",
 +                screen = ExtraPreferencesScreen,
 +            ))
@@ -40126,23 +39697,29 @@ index 0000000..880c200
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
 new file mode 100644
-index 0000000..1b47fe2
+index 0000000..464b033
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,86 @@
 +package xyz.mpv.rex.utils.media
 +
 +import android.net.Uri
 +import `is`.xyz.mpv.MPVLib
 +
 +/**
-+ * Applies network timeouts for network and P2P (torrent) streams, e.g. when used
-+ * as an external player for Stremio.
++ * Applies mpv options that improve playback smoothness for network and P2P (torrent)
++ * streams, e.g. when used as an external player for Stremio.
 + *
-+ * Must be called right before `loadfile` so the timeout is picked up by the
-+ * upcoming demuxer.
++ * Must be called right before `loadfile` so the options are picked up by the
++ * upcoming demuxer. Options are reset to safe defaults for local files.
 + */
 +object StreamTuning {
++
++  internal data class CacheLimits(
++    val maximumBytes: String,
++    val readaheadSeconds: String,
++  )
++
 +  private val NETWORK_SCHEMES =
 +    setOf("http", "https", "rtmp", "rtmps", "rtsp", "rtsps", "mms", "mmsh", "ftp", "ftps")
 +
@@ -40162,21 +39739,53 @@ index 0000000..1b47fe2
 +    return parsed.port == 11470 || parsed.pathSegments.firstOrNull()?.matches(Regex("[0-9a-fA-F]{40}")) == true
 +  }
 +
-+  fun applyTuningForUri(uri: String?) {
++  internal fun cacheLimits(maximumDownloadMiB: Int, maximumBufferedSeconds: Int): CacheLimits {
++    val downloadMiB = maximumDownloadMiB.coerceIn(0, 4096)
++    val bufferedSeconds = maximumBufferedSeconds.coerceIn(0, 3600)
++    return CacheLimits(
++      maximumBytes = if (downloadMiB == 0) UNBOUNDED_BYTES else "${downloadMiB}MiB",
++      readaheadSeconds = if (bufferedSeconds == 0) UNBOUNDED_SECONDS else bufferedSeconds.toString(),
++    )
++  }
++
++  fun applyTuningForUri(
++    uri: String?,
++    maximumDownloadMiB: Int = 200,
++    maximumBufferedSeconds: Int = 180,
++  ) {
 +    if (uri.isNullOrBlank()) return
++    val cacheLimits = cacheLimits(maximumDownloadMiB, maximumBufferedSeconds)
 +    when {
 +      isStremioTorrentUri(uri) -> {
-+        // Torrent peers can stall substantially longer than ordinary HTTP sources.
++        // Torrent (Stremio WebTorrent) server: peers are slow, so read far ahead
++        // and tolerate long stalls so playback doesn't freeze.
++        MPVLib.setOptionString("cache", "yes")
 +        MPVLib.setOptionString("network-timeout", "45")
++        MPVLib.setOptionString("demuxer-max-bytes", cacheLimits.maximumBytes)
++        MPVLib.setOptionString("demuxer-readahead-secs", cacheLimits.readaheadSeconds)
++        MPVLib.setOptionString("cache-secs", cacheLimits.readaheadSeconds)
 +      }
 +      isNetworkUri(uri) -> {
++        // Regular HTTP(S)/HLS/RTSP streams: modestly larger read-ahead cushion.
++        MPVLib.setOptionString("cache", "yes")
 +        MPVLib.setOptionString("network-timeout", "30")
++        MPVLib.setOptionString("demuxer-max-bytes", cacheLimits.maximumBytes)
++        MPVLib.setOptionString("demuxer-readahead-secs", cacheLimits.readaheadSeconds)
++        MPVLib.setOptionString("cache-secs", cacheLimits.readaheadSeconds)
 +      }
 +      else -> {
++        // Local files: reset to mpv defaults so cached tuning doesn't linger.
++        MPVLib.setOptionString("cache", "no")
 +        MPVLib.setOptionString("network-timeout", "30")
++        MPVLib.setOptionString("demuxer-max-bytes", "150MiB")
++        MPVLib.setOptionString("demuxer-readahead-secs", "10")
++        MPVLib.setOptionString("cache-secs", "10")
 +      }
 +    }
 +  }
++
++  private const val UNBOUNDED_BYTES = "4611686018427387903"
++  private const val UNBOUNDED_SECONDS = "1.7976931348623157e308"
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/storage/CoreMediaScanner.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/storage/CoreMediaScanner.kt
 index ffe0019..f48dbde 100644
@@ -40251,7 +39860,7 @@ index b99862e..59e398d 100644
              val r = rParts.getOrElse(i) { 0 }
              val c = cParts.getOrElse(i) { 0 }
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 243e0b7..f02839e 100644
+index 243e0b7..cdd93f2 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -182,6 +182,11 @@
@@ -40275,16 +39884,21 @@ index 243e0b7..f02839e 100644
      <string name="pref_subtitles_open_at_video_location_title">Open at video location</string>
      <string name="pref_subtitles_open_at_video_location_summary">Open file picker in the same folder as the current video</string>
      <string name="pref_subtitles_custom_picker_folder_title">Default selection folder</string>
-@@ -318,6 +325,22 @@
+@@ -318,6 +325,27 @@
  
      <string name="pref_advanced">Advanced</string>
      <string name="pref_advanced_summary">Configuration location, mpv.conf</string>
 +    <string name="pref_extra_settings_title">Extra Settings</string>
-+    <string name="pref_extra_settings_summary">Stream information, connectivity, and local subtitles</string>
++    <string name="pref_extra_settings_summary">Streaming limits, connectivity, and local subtitles</string>
 +    <string name="pref_extra_streaming_section">Streaming &amp; Network</string>
++    <string name="pref_extra_maximum_buffered_seconds_title">Maximum Allowed Buffered Seconds</string>
++    <string name="pref_extra_maximum_network_download_title">Maximum Allowed Network Stream Download</string>
 +    <string name="pref_extra_stream_info_refresh_title">Stream info refresh interval</string>
 +    <string name="pref_extra_ping_host_title">Ping host</string>
 +    <string name="pref_extra_seconds_value">%1$d seconds</string>
++    <string name="pref_extra_mib_value">%1$d MiB</string>
++    <string name="pref_extra_time_threshold_disabled">Disabled (no time threshold)</string>
++    <string name="pref_extra_size_threshold_disabled">Disabled (no size threshold)</string>
 +    <string name="pref_extra_non_negative_number_error">Enter zero or a positive whole number</string>
 +    <string name="pref_extra_positive_number_error">Enter a whole number greater than zero</string>
 +    <string name="pref_extra_host_error">Enter a host without spaces</string>
@@ -40298,7 +39912,7 @@ index 243e0b7..f02839e 100644
      <string name="pref_advanced_mpv_conf_storage_location">Pick configuration storage location</string>
      <string name="config_editor_unsaved_changes">Unsaved changes</string>
      <string name="config_editor_no_storage_location">No storage location set</string>
-@@ -1025,6 +1048,7 @@
+@@ -1025,6 +1053,7 @@
      <string name="btn_label_background_playback">Background Playback</string>
      <string name="btn_label_ambient_mode">Ambience Mode</string>
      <string name="btn_label_sleep_timer">Sleep Timer</string>
@@ -40353,51 +39967,6 @@ index 0860da9..d83ed8e 100644
    )
  }
 -
-diff --git a/app/src/test/kotlin/xyz/mpv/rex/domain/thumbnail/SeekPreviewRepositoryTest.kt b/app/src/test/kotlin/xyz/mpv/rex/domain/thumbnail/SeekPreviewRepositoryTest.kt
-new file mode 100644
-index 0000000..ae98273
---- /dev/null
-+++ b/app/src/test/kotlin/xyz/mpv/rex/domain/thumbnail/SeekPreviewRepositoryTest.kt
-@@ -0,0 +1,39 @@
-+package xyz.mpv.rex.domain.thumbnail
-+
-+import org.junit.Assert.assertEquals
-+import org.junit.Assert.assertTrue
-+import org.junit.Test
-+
-+class SeekPreviewRepositoryTest {
-+  @Test
-+  fun `frame count stays small and bounded`() {
-+    assertEquals(12, SeekPreviewRepository.frameCount(60f))
-+    assertEquals(12, SeekPreviewRepository.frameCount(3600f))
-+    assertEquals(32, SeekPreviewRepository.frameCount(20_000f))
-+  }
-+
-+  @Test
-+  fun `sample positions cover the timeline`() {
-+    val positions = SeekPreviewRepository.samplePositions(durationSeconds = 100f, count = 5)
-+
-+    assertEquals(0f, positions.first(), 0.001f)
-+    assertEquals(99.75f, positions.last(), 0.001f)
-+    assertTrue(positions.zipWithNext().all { (first, second) -> first < second })
-+  }
-+
-+  @Test
-+  fun `nearest frame clamps positions to timeline`() {
-+    assertEquals(0, SeekPreviewRepository.nearestFrameIndex(-10f, 100f, 5))
-+    assertEquals(2, SeekPreviewRepository.nearestFrameIndex(50f, 100f, 5))
-+    assertEquals(4, SeekPreviewRepository.nearestFrameIndex(150f, 100f, 5))
-+  }
-+
-+  @Test
-+  fun `progressive order contains every frame once`() {
-+    val order = SeekPreviewRepository.progressiveOrder(17)
-+
-+    assertEquals(17, order.size)
-+    assertEquals((0 until 17).toSet(), order.toSet())
-+    assertEquals(8, order.first())
-+  }
-+}
 diff --git a/app/src/test/kotlin/xyz/mpv/rex/ui/browser/videolist/VideoListPlaybackStateTest.kt b/app/src/test/kotlin/xyz/mpv/rex/ui/browser/videolist/VideoListPlaybackStateTest.kt
 new file mode 100644
 index 0000000..1152063
@@ -40569,26 +40138,38 @@ index 0000000..aeafaaf
 +}
 diff --git a/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamTuningTest.kt b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamTuningTest.kt
 new file mode 100644
-index 0000000..57e6452
+index 0000000..478d8f4
 --- /dev/null
 +++ b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamTuningTest.kt
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,31 @@
 +package xyz.mpv.rex.utils.media
 +
-+import org.junit.Assert.assertFalse
-+import org.junit.Assert.assertTrue
++import org.junit.Assert.assertEquals
 +import org.junit.Test
 +
 +class StreamTuningTest {
 +  @Test
-+  fun recognizesNetworkUris() {
-+    assertTrue(StreamTuning.isNetworkUri("https://example.com/video.mp4"))
-+    assertFalse(StreamTuning.isNetworkUri("/storage/emulated/0/video.mp4"))
++  fun positiveLimitsAreAppliedTogether() {
++    assertEquals(StreamTuning.CacheLimits("200MiB", "180"), StreamTuning.cacheLimits(200, 180))
 +  }
 +
 +  @Test
-+  fun recognizesStremioTorrentProxyUris() {
-+    assertTrue(StreamTuning.isStremioTorrentUri("http://127.0.0.1:11470/0123456789012345678901234567890123456789/video.mp4"))
-+    assertFalse(StreamTuning.isStremioTorrentUri("https://example.com/video.mp4"))
++  fun zeroByteLimitDisablesOnlyByteThreshold() {
++    assertEquals("180", StreamTuning.cacheLimits(0, 180).readaheadSeconds)
++    assertEquals("4611686018427387903", StreamTuning.cacheLimits(0, 180).maximumBytes)
++  }
++
++  @Test
++  fun zeroSecondLimitDisablesOnlyTimeThreshold() {
++    assertEquals("200MiB", StreamTuning.cacheLimits(200, 0).maximumBytes)
++    assertEquals("1.7976931348623157e308", StreamTuning.cacheLimits(200, 0).readaheadSeconds)
++  }
++
++  @Test
++  fun bothZeroLimitsDisableBothThresholds() {
++    assertEquals(
++      StreamTuning.CacheLimits("4611686018427387903", "1.7976931348623157e308"),
++      StreamTuning.cacheLimits(0, 0),
++    )
 +  }
 +}
