@@ -122,7 +122,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew --console=plain :app:testReleaseUnitTest :app:assembleRelease \
+          ./gradlew --console=plain :app:testDebugUnitTest :app:assembleRelease \
             -PreleaseKeyStore="$PWD/mpvrex-release.keystore" \
             -PreleaseKeyStorePassword="$KEYSTORE_PASSWORD" \
             -PreleaseKeyAlias=mpvrex \
