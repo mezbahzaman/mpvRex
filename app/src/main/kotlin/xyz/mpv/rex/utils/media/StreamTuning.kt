@@ -1,7 +1,7 @@
 package xyz.mpv.rex.utils.media
 
-import android.net.Uri
 import `is`.xyz.mpv.MPVLib
+import java.net.URI
 
 /**
  * Applies network timeouts for network and P2P (torrent) streams, e.g. when used
@@ -18,16 +18,17 @@ object StreamTuning {
   private val LOCAL_PROXY_HOSTS = setOf("127.0.0.1", "localhost", "0.0.0.0")
 
   fun isNetworkUri(uri: String): Boolean {
-    val scheme = runCatching { Uri.parse(uri).scheme }.getOrNull()?.lowercase()
+    val scheme = runCatching { URI(uri).scheme }.getOrNull()?.lowercase()
     return scheme in NETWORK_SCHEMES
   }
 
   fun isStremioTorrentUri(uri: String): Boolean {
     if (!isNetworkUri(uri)) return false
-    val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return false
+    val parsed = runCatching { URI(uri) }.getOrNull() ?: return false
     val host = parsed.host?.lowercase()
     if (host !in LOCAL_PROXY_HOSTS) return false
-    return parsed.port == 11470 || parsed.pathSegments.firstOrNull()?.matches(Regex("[0-9a-fA-F]{40}")) == true
+    val firstPathSegment = parsed.path?.trimStart('/')?.substringBefore('/')
+    return parsed.port == 11470 || firstPathSegment?.matches(Regex("[0-9a-fA-F]{40}")) == true
   }
 
   fun applyTuningForUri(uri: String?) {
