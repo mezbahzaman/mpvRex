@@ -22,7 +22,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..6977a21 100644
+index b937ac6..423f5cf 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -31,8 +31,8 @@ index b937ac6..6977a21 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 227
-+    versionName = "4.5.4"
++    versionCode = 229
++    versionName = "4.5.6"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -37760,7 +37760,7 @@ index 09ac607..65e680c 100644
      /**
       * Maximum volume for MPV in percent.
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index df45226..5fa02da 100644
+index df45226..1eb4080 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 @@ -4,7 +4,9 @@ import android.content.Context
@@ -37800,7 +37800,7 @@ index df45226..5fa02da 100644
    private val advancedPreferences: AdvancedPreferences by inject()
    private val json: Json by inject()
    private val playbackStateRepository: xyz.mpv.rex.domain.playbackstate.repository.PlaybackStateRepository by inject()
-@@ -253,6 +262,33 @@ class PlayerViewModel(
+@@ -253,6 +262,34 @@ class PlayerViewModel(
    val isVolumeSliderShown = MutableStateFlow(false)
    val volumeSliderTimestamp = MutableStateFlow(0L)
    val brightnessSliderTimestamp = MutableStateFlow(0L)
@@ -37808,6 +37808,7 @@ index df45226..5fa02da 100644
 +  // Live stats for network streams (Stremio HTTP / P2P torrents)
 +  private val _streamStats = MutableStateFlow(StreamStats())
 +  val streamStats: StateFlow<StreamStats> = _streamStats.asStateFlow()
++  private val streamStatsMutex = Mutex()
 +
 +  /**
 +   * Manual toggle for the stream-info overlay ("i" button). The overlay is also
@@ -37834,7 +37835,7 @@ index df45226..5fa02da 100644
    val currentBrightness =
      MutableStateFlow(
        runCatching {
-@@ -316,6 +352,17 @@ class PlayerViewModel(
+@@ -316,6 +353,17 @@ class PlayerViewModel(
    var currentMediaTitle: String = ""
    private var lastAutoSelectedMediaTitle: String? = null
  
@@ -37852,7 +37853,7 @@ index df45226..5fa02da 100644
    // External subtitle tracking
    val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
  
-@@ -441,6 +488,22 @@ class PlayerViewModel(
+@@ -441,6 +489,34 @@ class PlayerViewModel(
        }
      }
  
@@ -37860,7 +37861,17 @@ index df45226..5fa02da 100644
 +    viewModelScope.launch {
 +      while (isActive) {
 +        updateStreamStats()
-+        delay(extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L)
++        val pathAvailable = runCatching { MPVLib.getPropertyString("path") }.getOrNull() != null
++        val streamInfoVisible = streamStatsPanelVisible.value ||
++          (_streamStats.value.isNetwork && !_streamInfoDismissed.value && !_streamInfoAutoConsumed.value)
++        val refreshSeconds = if (streamInfoVisible) {
++          extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60)
++        } else if (!pathAvailable) {
++          1
++        } else {
++          HIDDEN_STREAM_STATS_REFRESH_SECONDS
++        }
++        delay(refreshSeconds * 1000L)
 +      }
 +    }
 +
@@ -37868,14 +37879,34 @@ index df45226..5fa02da 100644
 +    viewModelScope.launch {
 +      while (isActive) {
 +        maybeAutoLoadSubtitles()
-+        delay(1000)
++        val enabled = subtitlesPreferences.wyzieApiKey.get().isNotBlank() &&
++          (extraPreferences.autoStremioSubtitles.get() || extraPreferences.autoLocalSubtitles.get())
++        delay(if (enabled) 1000L else 10_000L)
 +      }
 +    }
 +
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2243,15 +2306,496 @@ class PlayerViewModel(
+@@ -575,6 +651,7 @@ class PlayerViewModel(
+ 
+   private companion object {
+     const val TAG = "PlayerViewModel"
++    const val HIDDEN_STREAM_STATS_REFRESH_SECONDS = 5
+     val VALID_SUBTITLE_EXTENSIONS =
+       setOf(
+         // Common & modern
+@@ -676,6 +753,9 @@ class PlayerViewModel(
+ 
+   fun prepareForFileLoad(initialDurationSec: Float? = null) {
+     resetExternalAudioTracks()
++    _streamInfoAutoConsumed.value = false
++    _streamInfoDismissed.value = false
++    lastVideoPlaying = false
+     _precisePosition.value = 0f
+     if (initialDurationSec != null && initialDurationSec > 0f) {
+       _primaryVideoDuration.value = initialDurationSec.toDouble()
+@@ -2243,15 +2323,459 @@ class PlayerViewModel(
        MPVLib.command("vf", "remove", "@mpvex_hflip")
        MPVLib.command("vf", "remove", "@mpvex_vflip")
  
@@ -37891,6 +37922,8 @@ index df45226..5fa02da 100644
 +  private var activeInfoHash: String? = null
 +  private var firstTorrentAttempt: Long = 0L
 +  private val statsGracePeriodMs = 15_000L
++  private val pingRefreshIntervalMs = 30_000L
++  private val swarmRefreshIntervalMs = 60_000L
 +
 +  // Connected-seeder count is only reported while pieces are actively being
 +  // requested (`wires` empties when the stream is buffered/idle). Retain the
@@ -37902,13 +37935,9 @@ index df45226..5fa02da 100644
 +  private var swarmSeeds: Int? = null
 +  private var lastSwarmPollMs = 0L
 +  private var swarmPollInFlight = false
-+  // Temporary diagnostics for buffering/stutter investigation.
 +  private var lastStatsPath: String? = null
 +  private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
 +  private var lastHttpSampleMs = 0L
-+  private var lastPausedForCache = false
-+  private var lastCachePausePos = 0.0
-+  private var lastDiagLogMs = 0L
 +  private var lastVideoPlaying = false
 +  private var pingMs = 0
 +  private var lastPingPollMs = 0L
@@ -37917,6 +37946,7 @@ index df45226..5fa02da 100644
 +  fun showStreamInfo() {
 +    streamStatsPanelVisible.value = true
 +    _streamInfoDismissed.value = false
++    viewModelScope.launch { updateStreamStats() }
 +  }
 +
 +  fun dismissStreamInfo() {
@@ -38165,7 +38195,7 @@ index df45226..5fa02da 100644
 +    Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")
 +  }
 +
-+  private suspend fun updateStreamStats() {
++  private suspend fun updateStreamStats() = streamStatsMutex.withLock {
 +    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
 +    if (path != lastStatsPath) {
 +      lastStatsPath = path
@@ -38200,9 +38230,8 @@ index df45226..5fa02da 100644
 +      lastVideoPlaying = false
 +      pingMs = 0
 +      lastPingPollMs = 0L
-+      return
++      return@withLock
 +    }
-+
 +    val infoHash = path?.let { StreamStatsFetcher.parseInfoHash(it) }
 +    var torrentStats: TorrentStats? = null
 +    if (infoHash != null) {
@@ -38258,22 +38287,6 @@ index df45226..5fa02da 100644
 +    lastHttpSampleMs = now
 +    val speedBytesPerSec = if (stats != null) stats.downloadSpeed.coerceAtLeast(0) else httpSpeed
 +
-+    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
-+    if (pausedForCache && !lastPausedForCache) {
-+      lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
-+      Log.d(
-+        TAG,
-+        "BUFFER pause start: pos=${lastCachePausePos} " +
-+          "cache=${"%.1f".format(runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)}s",
-+      )
-+    }
-+    if (!pausedForCache && lastPausedForCache) {
-+      val resumePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
-+      Log.d(TAG, "BUFFER resume: pausePos=$lastCachePausePos resumePos=$resumePos " +
-+        "delta=${"%.2f".format(resumePos - lastCachePausePos)}")
-+    }
-+    lastPausedForCache = pausedForCache
-+
 +    // One-shot auto-show: once the video actually begins playing, never
 +    // auto-show the stream-info overlay again for this playback (manual "i"
 +    // button is the only way). A position reset to ~0 means a new session.
@@ -38292,28 +38305,11 @@ index df45226..5fa02da 100644
 +      Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
 +    }
 +
-+    if (now - lastDiagLogMs > 10_000L) {
-+      lastDiagLogMs = now
-+      val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()
-+      val codec = runCatching { MPVLib.getPropertyString("video-format") }.getOrNull()
-+      val fps = runCatching { MPVLib.getPropertyDouble("container-fps") }.getOrNull()
-+      val buffering = runCatching { MPVLib.getPropertyInt("cache-buffering-state") }.getOrNull()
-+      val cacheSpeed = runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull()
-+      Log.d(
-+        TAG,
-+        "DIAG isTorrent=$isTorrent pausedForCache=$pausedForCache " +
-+          "buffering=$buffering cache=${"%.1f".format(bufferedSeconds)}s " +
-+          "cacheSpeed=$cacheSpeed hwdec=$hwdec codec=$codec fps=$fps " +
-+          "coreIdle=${runCatching { MPVLib.getPropertyBoolean("core-idle") }.getOrNull()}",
-+      )
-+    }
-+
 +    _streamStats.value =
 +      StreamStats(
 +        isNetwork = true,
 +        isTorrent = isTorrent,
 +        fetchingMetadata = isTorrent && stats == null,
-+        hasTorrentStats = stats != null,
 +        bufferedSeconds = bufferedSeconds,
 +        seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
 +        peers = stats?.peers ?: 0,
@@ -38326,8 +38322,7 @@ index df45226..5fa02da 100644
 +  private fun maybePollPing(path: String) {
 +    if (pingPollInFlight) return
 +    val now = SystemClock.elapsedRealtime()
-+    val refreshIntervalMs = extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L
-+    if (now - lastPingPollMs < refreshIntervalMs) return
++    if (now - lastPingPollMs < pingRefreshIntervalMs) return
 +    lastPingPollMs = now
 +    pingPollInFlight = true
 +    viewModelScope.launch {
@@ -38347,8 +38342,7 @@ index df45226..5fa02da 100644
 +  private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
 +    if (stats.trackerUrls.isEmpty() || swarmPollInFlight) return
 +    val now = SystemClock.elapsedRealtime()
-+    val refreshIntervalMs = extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L
-+    if (now - lastSwarmPollMs < refreshIntervalMs) return
++    if (now - lastSwarmPollMs < swarmRefreshIntervalMs) return
 +    lastSwarmPollMs = now
 +    swarmPollInFlight = true
 +    val expectedPath = lastStatsPath
@@ -38446,7 +38440,7 @@ index 7a195af..7c138d3 100644
  }
 -
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
-index 46fe72b..b65b34a 100644
+index 46fe72b..1853a87 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 @@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
@@ -38471,7 +38465,7 @@ index 46fe72b..b65b34a 100644
  @Suppress("CompositionLocalAllowlist")
  val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
  
-@@ -191,11 +199,23 @@ fun PlayerControls(
+@@ -191,11 +199,22 @@ fun PlayerControls(
    val duration by MPVLib.propInt["duration"].collectAsState()
    val position by MPVLib.propInt["time-pos"].collectAsState()
    val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
@@ -38482,7 +38476,6 @@ index 46fe72b..b65b34a 100644
    val preciseDuration by viewModel.preciseDuration.collectAsState()
    val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
 -
-+  val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
 +  val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
 +  val streamStats by viewModel.streamStats.collectAsState()
 +  val streamStatsPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
@@ -38496,7 +38489,7 @@ index 46fe72b..b65b34a 100644
    val doubleTapSeekAmount by viewModel.doubleTapSeekAmount.collectAsState()
    val doubleTapSeekBasePos by viewModel.doubleTapSeekBasePos.collectAsState()
    val showDoubleTapOvals by playerPreferences.showDoubleTapOvals.collectAsState()
-@@ -368,6 +388,7 @@ fun PlayerControls(
+@@ -368,6 +387,7 @@ fun PlayerControls(
          val unlockControlsButton = createRef()
          val (bottomRightControls, bottomLeftControls) = createRefs()
          val playerPauseButton = createRef()
@@ -38504,7 +38497,7 @@ index 46fe72b..b65b34a 100644
          val seekbar = createRef()
          val (playerUpdates, playerLockHint) = createRefs()
          val (customLeftButtonsRef, customRightButtonsRef) = createRefs()
-@@ -970,9 +991,31 @@ fun PlayerControls(
+@@ -970,9 +990,31 @@ fun PlayerControls(
  
            when {
              pausedForCache == true && showLoadingCircle -> {
@@ -38539,7 +38532,7 @@ index 46fe72b..b65b34a 100644
              }
  
              controlsShown && !areControlsLocked -> {
-@@ -1158,6 +1201,22 @@ fun PlayerControls(
+@@ -1158,6 +1200,22 @@ fun PlayerControls(
            }
          }
  
@@ -38562,7 +38555,7 @@ index 46fe72b..b65b34a 100644
          AnimatedVisibility(
            visible = (controlsShown || seekBarShown) && !areControlsLocked,
            enter =
-@@ -1212,25 +1271,18 @@ fun PlayerControls(
+@@ -1212,25 +1270,18 @@ fun PlayerControls(
  
            // Calculate read-ahead position (current position + buffered cache time)
            // No keys for remember, derivedStateOf reactively tracks read dependencies
@@ -38600,7 +38593,7 @@ index 46fe72b..b65b34a 100644
            }
  
            SeekbarWithTimers(
-@@ -1884,3 +1936,64 @@ fun PlayerControls(
+@@ -1884,3 +1935,64 @@ fun PlayerControls(
    }
  }
  
@@ -38666,7 +38659,7 @@ index 46fe72b..b65b34a 100644
 +  }
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
-index 1c39a0b..e813caf 100644
+index 1c39a0b..6358221 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
 @@ -54,6 +54,8 @@ import androidx.compose.material.icons.filled.Headset
@@ -38686,7 +38679,7 @@ index 1c39a0b..e813caf 100644
  
  @Composable
  fun RenderPlayerButton(
-@@ -1263,6 +1266,77 @@ fun RenderPlayerButton(
+@@ -1263,6 +1266,75 @@ fun RenderPlayerButton(
        }
      }
  
@@ -38695,8 +38688,6 @@ index 1c39a0b..e813caf 100644
 +      val isStreamInfoPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
 +      val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
 +      val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
-+      val pausedForCache by MPVLib.propBoolean["paused-for-cache"].collectAsState()
-+      val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
 +      val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
 +      val streamInfoAutoVisible =
 +        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
@@ -38764,7 +38755,7 @@ index 1c39a0b..e813caf 100644
      PlayerButton.NONE -> { /* Do nothing */
      }
    }
-@@ -1329,4 +1403,3 @@ fun Surface(
+@@ -1329,4 +1401,3 @@ fun Surface(
          content = content
      )
  }
@@ -39223,17 +39214,17 @@ index de16e42..b474dcc 100644
                  titleRes = R.string.pref_export_settings_title,
                  summaryRes = R.string.pref_export_settings_summary,
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
-index 8284ff2..06c95aa 100644
+index 8284ff2..cb7d6f1 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
-@@ -65,6 +65,7 @@ import xyz.mpv.rex.presentation.Screen
+@@ -64,6 +64,7 @@ import xyz.mpv.rex.preferences.preference.collectAsState
+ import xyz.mpv.rex.presentation.Screen
  import xyz.mpv.rex.ui.utils.LocalBackStack
  import xyz.mpv.rex.utils.media.CustomFontEntry
- import xyz.mpv.rex.utils.media.copyFontsFromDirectory
 +import xyz.mpv.rex.utils.media.copyBundledSubtitleFonts
+ import xyz.mpv.rex.utils.media.copyFontsFromDirectory
  import xyz.mpv.rex.utils.media.loadCustomFontEntries
  import com.github.k1rakishou.fsaf.FileManager
- import kotlinx.coroutines.Dispatchers
 @@ -88,6 +89,7 @@ object SubtitlesPreferencesScreen : Screen {
    @Composable
    override fun Content() {
@@ -39372,10 +39363,10 @@ index 3faf7a1..469714e 100644
      else -> if (uri.scheme == "file") {
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
 new file mode 100644
-index 0000000..880c200
+index 0000000..6f95c08
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,318 @@
 +package xyz.mpv.rex.utils.media
 +
 +import android.net.Uri
@@ -39400,13 +39391,12 @@ index 0000000..880c200
 + *
 + * For torrent streams, Stremio's streaming server (local WebTorrent HTTP engine)
 + * exposes a real-time JSON endpoint: `{origin}/{infoHash}/stats.json`.
-+ * Polled once per second; combined with mpv's own cache properties.
++ * Combined with mpv's own cache properties by the player stats loop.
 + */
 +data class StreamStats(
 +  val isNetwork: Boolean = false,
 +  val isTorrent: Boolean = false,
 +  val fetchingMetadata: Boolean = false,
-+  val hasTorrentStats: Boolean = false,
 +  val bufferedSeconds: Float = 0f,
 +  val seeds: Int = 0,
 +  val peers: Int = 0,
@@ -39529,7 +39519,7 @@ index 0000000..880c200
 +      "info_hash=$infoHashParam&peer_id=$peerId&port=6881" +
 +        "&uploaded=0&downloaded=0&left=1&compact=1&numwant=0"
 +
-+    trackerUrls.distinct().take(12).map { tracker ->
++    trackerUrls.distinct().take(3).map { tracker ->
 +      async(Dispatchers.IO) {
 +        when {
 +          tracker.startsWith("udp://", ignoreCase = true) -> fetchUdpTrackerSeeds(rawHash, tracker)
