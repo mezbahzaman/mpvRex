@@ -2367,11 +2367,15 @@ class PlayerViewModel(
 
     val duration = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
     if (SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
-    if (duration == null || !duration.isFinite() || duration < autoSubMinimumDurationSeconds) {
-      lastAutoSubPath = path
-      lastAutoSubAttemptMs = Long.MAX_VALUE
-      Log.d(TAG, "AutoSub: runtime below 10 minutes or unavailable, skipping online subtitles")
-      return
+    when (decideAutoSubtitleDuration(duration, autoSubMinimumDurationSeconds)) {
+      AutoSubtitleDurationDecision.PENDING -> return
+      AutoSubtitleDurationDecision.SKIP -> {
+        lastAutoSubPath = path
+        lastAutoSubAttemptMs = Long.MAX_VALUE
+        Log.d(TAG, "AutoSub: runtime below 10 minutes, skipping online subtitles")
+        return
+      }
+      AutoSubtitleDurationDecision.CONTINUE -> Unit
     }
 
     // Wait until the demuxer has populated the track list so that embedded-sub

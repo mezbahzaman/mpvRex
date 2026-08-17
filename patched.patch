@@ -22,7 +22,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..74a38c6 100644
+index b937ac6..29a5387 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -31,8 +31,8 @@ index b937ac6..74a38c6 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 221
-+    versionName = "4.6.9"
++    versionCode = 222
++    versionName = "4.6.10"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -201,6 +201,28 @@ index b7ade6a..5b021a7 100644
              val subFileName = "${fullTitle}.${langCode}.$extension"
  
              if (saveFolderUri.isNotBlank()) {
+diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/AutoSubtitleDuration.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/AutoSubtitleDuration.kt
+new file mode 100644
+index 0000000..bab4dc3
+--- /dev/null
++++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/AutoSubtitleDuration.kt
+@@ -0,0 +1,16 @@
++package xyz.mpv.rex.ui.player
++
++internal enum class AutoSubtitleDurationDecision {
++  PENDING,
++  SKIP,
++  CONTINUE,
++}
++
++internal fun decideAutoSubtitleDuration(
++  duration: Double?,
++  minimumSeconds: Double,
++): AutoSubtitleDurationDecision {
++  if (duration == null || !duration.isFinite()) return AutoSubtitleDurationDecision.PENDING
++  if (duration < minimumSeconds) return AutoSubtitleDurationDecision.SKIP
++  return AutoSubtitleDurationDecision.CONTINUE
++}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
 index a7a5287..594f7ef 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/HeadlessPlaybackController.kt
@@ -599,7 +621,7 @@ index 09ac607..199b157 100644
      /**
       * Maximum volume for MPV in percent.
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index feecc99..cec4153 100644
+index feecc99..b42ba5d 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 @@ -4,7 +4,9 @@ import android.content.Context
@@ -698,7 +720,7 @@ index feecc99..cec4153 100644
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2230,15 +2290,478 @@ class PlayerViewModel(
+@@ -2230,15 +2290,482 @@ class PlayerViewModel(
        MPVLib.command("vf", "remove", "@mpvex_hflip")
        MPVLib.command("vf", "remove", "@mpvex_vflip")
  
@@ -780,11 +802,15 @@ index feecc99..cec4153 100644
 +
 +    val duration = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
 +    if (SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
-+    if (duration == null || !duration.isFinite() || duration < autoSubMinimumDurationSeconds) {
-+      lastAutoSubPath = path
-+      lastAutoSubAttemptMs = Long.MAX_VALUE
-+      Log.d(TAG, "AutoSub: runtime below 10 minutes or unavailable, skipping online subtitles")
-+      return
++    when (decideAutoSubtitleDuration(duration, autoSubMinimumDurationSeconds)) {
++      AutoSubtitleDurationDecision.PENDING -> return
++      AutoSubtitleDurationDecision.SKIP -> {
++        lastAutoSubPath = path
++        lastAutoSubAttemptMs = Long.MAX_VALUE
++        Log.d(TAG, "AutoSub: runtime below 10 minutes, skipping online subtitles")
++        return
++      }
++      AutoSubtitleDurationDecision.CONTINUE -> Unit
 +    }
 +
 +    // Wait until the demuxer has populated the track list so that embedded-sub
@@ -2044,6 +2070,47 @@ index 243e0b7..005635c 100644
      <string name="btn_label_none">None</string>
  
  
+diff --git a/app/src/test/kotlin/xyz/mpv/rex/ui/player/AutoSubtitleDurationTest.kt b/app/src/test/kotlin/xyz/mpv/rex/ui/player/AutoSubtitleDurationTest.kt
+new file mode 100644
+index 0000000..747fa2d
+--- /dev/null
++++ b/app/src/test/kotlin/xyz/mpv/rex/ui/player/AutoSubtitleDurationTest.kt
+@@ -0,0 +1,35 @@
++package xyz.mpv.rex.ui.player
++
++import org.junit.Assert.assertEquals
++import org.junit.Test
++
++class AutoSubtitleDurationTest {
++
++  private val minimumSeconds = 10 * 60.0
++
++  @Test
++  fun decideAutoSubtitleDuration_unknownDuration_remainsPending() {
++    assertEquals(AutoSubtitleDurationDecision.PENDING, decideAutoSubtitleDuration(null, minimumSeconds))
++    assertEquals(AutoSubtitleDurationDecision.PENDING, decideAutoSubtitleDuration(Double.NaN, minimumSeconds))
++    assertEquals(
++      AutoSubtitleDurationDecision.PENDING,
++      decideAutoSubtitleDuration(Double.POSITIVE_INFINITY, minimumSeconds),
++    )
++  }
++
++  @Test
++  fun decideAutoSubtitleDuration_knownDuration_appliesMinimumRuntime() {
++    assertEquals(
++      AutoSubtitleDurationDecision.SKIP,
++      decideAutoSubtitleDuration(minimumSeconds - 1, minimumSeconds),
++    )
++    assertEquals(
++      AutoSubtitleDurationDecision.CONTINUE,
++      decideAutoSubtitleDuration(minimumSeconds, minimumSeconds),
++    )
++    assertEquals(
++      AutoSubtitleDurationDecision.CONTINUE,
++      decideAutoSubtitleDuration(minimumSeconds + 1, minimumSeconds),
++    )
++  }
++}
 diff --git a/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt
 new file mode 100644
 index 0000000..aeafaaf
