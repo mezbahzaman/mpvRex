@@ -22,7 +22,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..ed49df0 100644
+index b937ac6..74a38c6 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -31,8 +31,8 @@ index b937ac6..ed49df0 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 220
-+    versionName = "4.6.8"
++    versionCode = 221
++    versionName = "4.6.9"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -599,7 +599,7 @@ index 09ac607..199b157 100644
      /**
       * Maximum volume for MPV in percent.
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index feecc99..bea5fe5 100644
+index feecc99..cec4153 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 @@ -4,7 +4,9 @@ import android.content.Context
@@ -698,7 +698,7 @@ index feecc99..bea5fe5 100644
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2230,15 +2290,450 @@ class PlayerViewModel(
+@@ -2230,15 +2290,478 @@ class PlayerViewModel(
        MPVLib.command("vf", "remove", "@mpvex_hflip")
        MPVLib.command("vf", "remove", "@mpvex_vflip")
  
@@ -735,6 +735,10 @@ index feecc99..bea5fe5 100644
 +  private var lastCachePausePos = 0.0
 +  private var lastDiagLogMs = 0L
 +  private var lastVideoPlaying = false
++  private var pingMs = 0
++  private var lastPingPollMs = 0L
++  private var pingPollInFlight = false
++  private val pingPollIntervalMs = 5_000L
 +
 +  fun showStreamInfo() {
 +    streamStatsPanelVisible.value = true
@@ -985,6 +989,8 @@ index feecc99..bea5fe5 100644
 +      _streamInfoDismissed.value = false
 +      _streamInfoAutoConsumed.value = false
 +      lastVideoPlaying = false
++      pingMs = 0
++      lastPingPollMs = 0L
 +      lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
 +      lastHttpSampleMs = SystemClock.elapsedRealtime()
 +    }
@@ -1001,6 +1007,8 @@ index feecc99..bea5fe5 100644
 +      _streamInfoDismissed.value = false
 +      _streamInfoAutoConsumed.value = false
 +      lastVideoPlaying = false
++      pingMs = 0
++      lastPingPollMs = 0L
 +      return
 +    }
 +
@@ -1036,6 +1044,7 @@ index feecc99..bea5fe5 100644
 +    val bufferedSeconds =
 +      (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
 +        .toFloat()
++    maybePollPing(path!!)
 +
 +    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
 +
@@ -1081,9 +1090,9 @@ index feecc99..bea5fe5 100644
 +    val videoPlaying = timePos > 0.5 && !pausedForCache
 +    if (videoPlaying) {
 +      lastVideoPlaying = true
-+      if (!_streamInfoAutoConsumed.value) {
++      if (!_streamInfoAutoConsumed.value && bufferedSeconds >= 5f) {
 +        _streamInfoAutoConsumed.value = true
-+        Log.d(TAG, "StreamInfo: video begun (pos=$timePos), auto overlay consumed")
++        Log.d(TAG, "StreamInfo: video begun with ${bufferedSeconds}s buffered, auto overlay consumed")
 +      }
 +    } else if (lastVideoPlaying && timePos <= 0.5) {
 +      lastVideoPlaying = false
@@ -1118,8 +1127,27 @@ index feecc99..bea5fe5 100644
 +        seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
 +        peers = stats?.peers ?: 0,
 +        swarmSeeds = swarmSeeds,
++        pingMs = pingMs,
 +        speedBytesPerSec = speedBytesPerSec,
 +      )
++  }
++
++  private fun maybePollPing(path: String) {
++    if (pingPollInFlight) return
++    val now = SystemClock.elapsedRealtime()
++    if (now - lastPingPollMs < pingPollIntervalMs) return
++    lastPingPollMs = now
++    pingPollInFlight = true
++    viewModelScope.launch {
++      try {
++        val result = withContext(Dispatchers.IO) { StreamStatsFetcher.fetchPingMs() }
++        if (lastStatsPath == path && runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
++          pingMs = result
++        }
++      } finally {
++        pingPollInFlight = false
++      }
++    }
 +  }
 +
 +  private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
@@ -1223,7 +1251,7 @@ index 7a195af..7c138d3 100644
  }
 -
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
-index b862b32..de6f4ee 100644
+index b862b32..1fea17b 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 @@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
@@ -1248,7 +1276,7 @@ index b862b32..de6f4ee 100644
  @Suppress("CompositionLocalAllowlist")
  val LocalPlayerButtonsClickEvent = staticCompositionLocalOf { {} }
  
-@@ -192,9 +200,22 @@ fun PlayerControls(
+@@ -192,9 +200,21 @@ fun PlayerControls(
    val position by MPVLib.propInt["time-pos"].collectAsState()
    val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
    val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
@@ -1264,14 +1292,13 @@ index b862b32..de6f4ee 100644
 +  val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
 +
 +  val streamInfoAutoVisible =
-+    streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
-+      (pausedForCache == true || (coreIdle == true && eofReached != true))
++    streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
 +  val streamInfoVisible =
 +    streamStats.isNetwork && (streamStatsPanelVisible || streamInfoAutoVisible)
  
    val doubleTapSeekAmount by viewModel.doubleTapSeekAmount.collectAsState()
    val doubleTapSeekBasePos by viewModel.doubleTapSeekBasePos.collectAsState()
-@@ -368,6 +389,7 @@ fun PlayerControls(
+@@ -368,6 +388,7 @@ fun PlayerControls(
          val unlockControlsButton = createRef()
          val (bottomRightControls, bottomLeftControls) = createRefs()
          val playerPauseButton = createRef()
@@ -1279,7 +1306,7 @@ index b862b32..de6f4ee 100644
          val seekbar = createRef()
          val (playerUpdates, playerLockHint) = createRefs()
          val (customLeftButtonsRef, customRightButtonsRef) = createRefs()
-@@ -970,9 +992,22 @@ fun PlayerControls(
+@@ -970,9 +991,22 @@ fun PlayerControls(
  
            when {
              pausedForCache == true && showLoadingCircle -> {
@@ -1305,7 +1332,7 @@ index b862b32..de6f4ee 100644
              }
  
              controlsShown && !areControlsLocked -> {
-@@ -1158,6 +1193,22 @@ fun PlayerControls(
+@@ -1158,6 +1192,22 @@ fun PlayerControls(
            }
          }
  
@@ -1328,7 +1355,7 @@ index b862b32..de6f4ee 100644
          AnimatedVisibility(
            visible = (controlsShown || seekBarShown) && !areControlsLocked,
            enter =
-@@ -1217,18 +1268,27 @@ fun PlayerControls(
+@@ -1217,18 +1267,27 @@ fun PlayerControls(
                val currentPos = position?.toFloat() ?: 0f
                val cacheDuration = demuxerCacheDuration ?: 0f
                val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
@@ -1367,7 +1394,7 @@ index b862b32..de6f4ee 100644
                }
              }
            }
-@@ -1890,3 +1950,62 @@ fun PlayerControls(
+@@ -1890,3 +1949,64 @@ fun PlayerControls(
    }
  }
  
@@ -1406,6 +1433,7 @@ index b862b32..de6f4ee 100644
 +              streamStats.seeds,
 +              streamStats.peers,
 +              swarmSeeds,
++              streamStats.pingMs,
 +              speedText,
 +            )
 +          } else {
@@ -1414,11 +1442,12 @@ index b862b32..de6f4ee 100644
 +              bufferedSeconds,
 +              streamStats.seeds,
 +              streamStats.peers,
++              streamStats.pingMs,
 +              speedText,
 +            )
 +          }
 +        } else {
-+          stringResource(R.string.stream_stats_line_http, bufferedSeconds, speedText)
++          stringResource(R.string.stream_stats_line_http, bufferedSeconds, streamStats.pingMs, speedText)
 +        }
 +      Text(
 +        text = line,
@@ -1431,7 +1460,7 @@ index b862b32..de6f4ee 100644
 +  }
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
-index 1c39a0b..34ae325 100644
+index 1c39a0b..e813caf 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
 @@ -54,6 +54,8 @@ import androidx.compose.material.icons.filled.Headset
@@ -1451,7 +1480,7 @@ index 1c39a0b..34ae325 100644
  
  @Composable
  fun RenderPlayerButton(
-@@ -1263,6 +1266,78 @@ fun RenderPlayerButton(
+@@ -1263,6 +1266,77 @@ fun RenderPlayerButton(
        }
      }
  
@@ -1464,8 +1493,7 @@ index 1c39a0b..34ae325 100644
 +      val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
 +      val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
 +      val streamInfoAutoVisible =
-+        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
-+          (pausedForCache == true || (coreIdle == true && eofReached != true))
++        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
 +      val isStreamInfoVisible = streamStats.isNetwork && (isStreamInfoPanelVisible || streamInfoAutoVisible)
 +      val toggleStreamInfo = {
 +        clickEvent()
@@ -1530,6 +1558,11 @@ index 1c39a0b..34ae325 100644
      PlayerButton.NONE -> { /* Do nothing */
      }
    }
+@@ -1329,4 +1403,3 @@ fun Surface(
+         content = content
+     )
+ }
+-
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
 index 8284ff2..fee01b4 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/SubtitlesPreferencesScreen.kt
@@ -1558,10 +1591,10 @@ index 8284ff2..fee01b4 100644
                  value = overrideAss,
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
 new file mode 100644
-index 0000000..4feb91e
+index 0000000..3a95270
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,318 @@
 +package xyz.mpv.rex.utils.media
 +
 +import android.net.Uri
@@ -1578,6 +1611,7 @@ index 0000000..4feb91e
 +import java.net.URL
 +import java.nio.ByteBuffer
 +import java.nio.ByteOrder
++import java.util.concurrent.TimeUnit
 +import kotlin.random.Random
 +
 +/**
@@ -1596,6 +1630,7 @@ index 0000000..4feb91e
 +  val seeds: Int = 0,
 +  val peers: Int = 0,
 +  val swarmSeeds: Int? = null,
++  val pingMs: Int = 0,
 +  val speedBytesPerSec: Long = 0,
 +)
 +
@@ -1613,6 +1648,31 @@ index 0000000..4feb91e
 +
 +  private const val STATS_TIMEOUT_MS = 1500
 +  private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
++  private val PING_TIME_REGEX = Regex("time[=<]([0-9]+(?:\\.[0-9]+)?)\\s*ms", RegexOption.IGNORE_CASE)
++
++  /** Returns ICMP latency to google.com, or 0 when the probe times out/fails. */
++  fun fetchPingMs(): Int {
++    var process: Process? = null
++    return try {
++      process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "2", "google.com")
++        .redirectErrorStream(true)
++        .start()
++      if (!process.waitFor(3, TimeUnit.SECONDS)) {
++        process.destroyForcibly()
++        return 0
++      }
++      val output = process.inputStream.bufferedReader().use { it.readText() }
++      parsePingMs(output)
++    } catch (_: Exception) {
++      0
++    } finally {
++      process?.destroy()
++    }
++  }
++
++  internal fun parsePingMs(output: String): Int =
++    PING_TIME_REGEX.find(output)?.groupValues?.getOrNull(1)
++      ?.toDoubleOrNull()?.toInt()?.coerceAtLeast(1) ?: 0
 +
 +  /**
 +   * Detects a Stremio torrent URL. The infoHash is the first path segment
@@ -1952,7 +2012,7 @@ index b99862e..3c65996 100644
              val r = rParts.getOrElse(i) { 0 }
              val c = cParts.getOrElse(i) { 0 }
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 243e0b7..95b9b4c 100644
+index 243e0b7..005635c 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -182,6 +182,11 @@
@@ -1961,9 +2021,9 @@ index 243e0b7..95b9b4c 100644
      <string name="pref_player_close_after_eof">Close after the end of playback</string>
 +    <string name="buffering_percent">Buffering %1$d%%</string>
 +    <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
-+    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$s</string>
-+    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$s</string>
-+    <string name="stream_stats_line_http">%1$ds buffered • %2$s</string>
++    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$d ms • %5$s</string>
++    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$d ms • %6$s</string>
++    <string name="stream_stats_line_http">%1$ds buffered • %2$d ms • %3$s</string>
      <string name="pref_player_remember_brightness">Remember display brightness</string>
  
      <string name="pref_player_gestures">Gestures</string>
@@ -1986,10 +2046,10 @@ index 243e0b7..95b9b4c 100644
  
 diff --git a/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt
 new file mode 100644
-index 0000000..caa3c78
+index 0000000..aeafaaf
 --- /dev/null
 +++ b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,31 @@
 +package xyz.mpv.rex.utils.media
 +
 +import org.junit.Assert.assertEquals
@@ -2012,5 +2072,12 @@ index 0000000..caa3c78
 +  fun formatsZeroAndMegabyteSpeeds() {
 +    assertEquals("0 KB/s", StreamStatsFetcher.formatSpeed(0))
 +    assertEquals("1.3 MB/s", StreamStatsFetcher.formatSpeed(1_300_000))
++  }
++
++  @Test
++  fun parsesPingLatencyAndFailure() {
++    assertEquals(50, StreamStatsFetcher.parsePingMs("64 bytes from host: time=50.7 ms"))
++    assertEquals(1, StreamStatsFetcher.parsePingMs("64 bytes from host: time<1 ms"))
++    assertEquals(0, StreamStatsFetcher.parsePingMs("100% packet loss"))
 +  }
 +}
