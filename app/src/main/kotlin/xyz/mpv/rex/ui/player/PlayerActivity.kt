@@ -156,6 +156,7 @@ class PlayerActivity :
   private val subtitlesPreferences: SubtitlesPreferences by inject()
 
   private val extraPreferences: ExtraPreferences by inject()
+  private val seekPreviewRepository: xyz.mpv.rex.domain.thumbnail.SeekPreviewRepository by inject()
 
   /**
    * Preferences for advanced settings.
@@ -500,6 +501,7 @@ class PlayerActivity :
           runCatching { MPVLib.setPropertyBoolean("pause", true) }
         }
         applyStreamTuning(playableUri)
+        prepareSeekPreviews(playableUri, extractUriFromIntent(intent)?.toString(), intent.extras)
         player.playFile(playableUri)
       }
     } else if (isAlreadyPlayingCurrent) {
@@ -717,6 +719,7 @@ class PlayerActivity :
   @RequiresApi(Build.VERSION_CODES.P)
   override fun onDestroy() {
     Log.d(TAG, "PlayerActivity onDestroy")
+    seekPreviewRepository.cancel()
 
     runCatching {
       // Only stop the service if we're not doing manual background playback
@@ -1339,11 +1342,7 @@ class PlayerActivity :
   }
 
   private fun applyStreamTuning(uri: String?) {
-    StreamTuning.applyTuningForUri(
-      uri = uri,
-      maximumDownloadMiB = extraPreferences.maximumNetworkDownloadMiB.get(),
-      maximumBufferedSeconds = extraPreferences.maximumBufferedSeconds.get(),
-    )
+    StreamTuning.applyTuningForUri(uri)
   }
 
   /**
@@ -1419,6 +1418,26 @@ class PlayerActivity :
       safeSetPropertyString("http-header-fields", "")
       Log.d(TAG, "Cleared HTTP headers")
     }
+  }
+
+  private fun prepareSeekPreviews(
+    uri: String,
+    sourceUri: String? = null,
+    extras: Bundle? = null,
+    durationHintSeconds: Float? = null,
+  ) {
+    val headers = java.util.TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
+    val parsedUri = runCatching { Uri.parse(uri) }.getOrNull()
+    if (HttpUtils.isNetworkStream(parsedUri)) {
+      HttpUtils.extractRefererDomain(parsedUri)?.let { headers["Referer"] = it }
+    }
+    extras?.getStringArray("headers")
+      ?.asSequence()
+      ?.chunked(2)
+      ?.filter { it.size == 2 && !it[0].isNullOrBlank() && !it[1].isNullOrBlank() }
+      ?.forEach { (key, value) -> headers[key!!] = value!! }
+
+    seekPreviewRepository.prepare(uri, sourceUri ?: uri, headers, durationHintSeconds)
   }
   /**
    * Sets HTTP headers for a specific URI (used for playlist items).
@@ -2810,6 +2829,7 @@ class PlayerActivity :
         // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
         lifecycleScope.launch(Dispatchers.Default) {
           applyStreamTuning(uriStr)
+          prepareSeekPreviews(uriStr, extractUriFromIntent(intent)?.toString(), intent.extras, fastDurationSec)
           MPVLib.command("loadfile", uriStr)
         }
       }
@@ -3820,6 +3840,12 @@ class PlayerActivity :
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
       applyStreamTuning(playableUri)
+      prepareSeekPreviews(
+        playableUri,
+        sourceUri = uri.toString(),
+        extras = intent.extras,
+        durationHintSeconds = fastDurationSec,
+      )
       MPVLib.command("loadfile", playableUri)
     }
 
@@ -4012,9 +4038,11 @@ class PlayerActivity :
           if (mpvInitialized) {
             lifecycleScope.launch(Dispatchers.Default) {
               applyStreamTuning(uriStr)
+              prepareSeekPreviews(uriStr, extractUriFromIntent(intent)?.toString(), intent.extras)
               MPVLib.command("loadfile", uriStr)
             }
           } else {
+            prepareSeekPreviews(uriStr, extractUriFromIntent(intent)?.toString(), intent.extras)
             player.playFile(uriStr)
           }
         }

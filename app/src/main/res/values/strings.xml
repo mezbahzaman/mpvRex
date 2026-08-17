@@ -326,16 +326,11 @@
     <string name="pref_advanced">Advanced</string>
     <string name="pref_advanced_summary">Configuration location, mpv.conf</string>
     <string name="pref_extra_settings_title">Extra Settings</string>
-    <string name="pref_extra_settings_summary">Streaming limits, connectivity, and local subtitles</string>
+    <string name="pref_extra_settings_summary">Stream information, connectivity, and local subtitles</string>
     <string name="pref_extra_streaming_section">Streaming &amp; Network</string>
-    <string name="pref_extra_maximum_buffered_seconds_title">Maximum Allowed Buffered Seconds</string>
-    <string name="pref_extra_maximum_network_download_title">Maximum Allowed Network Stream Download</string>
     <string name="pref_extra_stream_info_refresh_title">Stream info refresh interval</string>
     <string name="pref_extra_ping_host_title">Ping host</string>
     <string name="pref_extra_seconds_value">%1$d seconds</string>
-    <string name="pref_extra_mib_value">%1$d MiB</string>
-    <string name="pref_extra_time_threshold_disabled">Disabled (no time threshold)</string>
-    <string name="pref_extra_size_threshold_disabled">Disabled (no size threshold)</string>
     <string name="pref_extra_non_negative_number_error">Enter zero or a positive whole number</string>
     <string name="pref_extra_positive_number_error">Enter a whole number greater than zero</string>
     <string name="pref_extra_host_error">Enter a host without spaces</string>

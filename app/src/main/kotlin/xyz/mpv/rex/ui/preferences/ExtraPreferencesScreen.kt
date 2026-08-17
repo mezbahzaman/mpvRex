@@ -57,8 +57,6 @@ object ExtraPreferencesScreen : Screen {
     val backStack = LocalBackStack.current
     val preferences = koinInject<ExtraPreferences>()
     val autoStremioSubtitles by preferences.autoStremioSubtitles.collectAsState()
-    val maximumBufferedSeconds by preferences.maximumBufferedSeconds.collectAsState()
-    val maximumNetworkDownloadMiB by preferences.maximumNetworkDownloadMiB.collectAsState()
     val streamInfoRefreshSeconds by preferences.streamInfoRefreshSeconds.collectAsState()
     val pingHost by preferences.pingHost.collectAsState()
     val autoLocalSubtitles by preferences.autoLocalSubtitles.collectAsState()
@@ -135,42 +133,6 @@ object ExtraPreferencesScreen : Screen {
                 onValueChange = preferences.autoStremioSubtitles::set,
                 title = { Text(stringResource(R.string.pref_subtitles_auto_stremio_title)) },
                 summary = { Text(stringResource(R.string.pref_subtitles_auto_stremio_summary)) },
-              )
-              PreferenceDivider()
-              ValuePreference(
-                title = stringResource(R.string.pref_extra_maximum_buffered_seconds_title),
-                summary = if (maximumBufferedSeconds == 0) {
-                  stringResource(R.string.pref_extra_time_threshold_disabled)
-                } else {
-                  stringResource(R.string.pref_extra_seconds_value, maximumBufferedSeconds)
-                },
-                onClick = {
-                  numberDialog =
-                    NumberSetting(
-                      R.string.pref_extra_maximum_buffered_seconds_title,
-                      maximumBufferedSeconds,
-                      0,
-                      preferences.maximumBufferedSeconds::set,
-                    )
-                },
-              )
-              PreferenceDivider()
-              ValuePreference(
-                title = stringResource(R.string.pref_extra_maximum_network_download_title),
-                summary = if (maximumNetworkDownloadMiB == 0) {
-                  stringResource(R.string.pref_extra_size_threshold_disabled)
-                } else {
-                  stringResource(R.string.pref_extra_mib_value, maximumNetworkDownloadMiB)
-                },
-                onClick = {
-                  numberDialog =
-                    NumberSetting(
-                      R.string.pref_extra_maximum_network_download_title,
-                      maximumNetworkDownloadMiB,
-                      0,
-                      preferences.maximumNetworkDownloadMiB::set,
-                    )
-                },
               )
               PreferenceDivider()
               ValuePreference(

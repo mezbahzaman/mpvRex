@@ -600,7 +600,7 @@ object SearchablePreferences {
             add(SearchablePreference(
                 titleRes = R.string.pref_extra_settings_title,
                 summaryRes = R.string.pref_extra_settings_summary,
-                keywords = listOf("extra", "buffer", "network", "ping", "local subtitles"),
+                keywords = listOf("extra", "network", "ping", "local subtitles"),
                 category = "Advanced",
                 screen = ExtraPreferencesScreen,
             ))
@@ -608,18 +608,6 @@ object SearchablePreferences {
                 titleRes = R.string.pref_subtitles_auto_stremio_title,
                 summaryRes = R.string.pref_subtitles_auto_stremio_summary,
                 keywords = listOf("stremio", "automatic", "download", "subtitles"),
-                category = "Extra Settings",
-                screen = ExtraPreferencesScreen,
-            ))
-            add(SearchablePreference(
-                titleRes = R.string.pref_extra_maximum_buffered_seconds_title,
-                keywords = listOf("buffer", "cache", "seconds", "streaming"),
-                category = "Extra Settings",
-                screen = ExtraPreferencesScreen,
-            ))
-            add(SearchablePreference(
-                titleRes = R.string.pref_extra_maximum_network_download_title,
-                keywords = listOf("network", "download", "limit", "mib"),
                 category = "Extra Settings",
                 screen = ExtraPreferencesScreen,
             ))

@@ -12,17 +12,21 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -50,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -57,6 +62,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -79,6 +85,7 @@ import xyz.mpv.rex.preferences.PlayerPreferences
 import org.koin.compose.koinInject
 import xyz.mpv.rex.preferences.GesturePreferences
 import xyz.mpv.rex.preferences.preference.collectAsState
+import xyz.mpv.rex.domain.thumbnail.SeekPreviewRepository
 
 @Composable
 fun SeekbarWithTimers(
@@ -97,11 +104,31 @@ fun SeekbarWithTimers(
   loopEnd: Float? = null,
   isGestureSeeking: Boolean = false,
   isCancelActive: Boolean = false,
+  previewPath: String? = null,
   modifier: Modifier = Modifier,
 ) {
   val clickEvent = LocalPlayerButtonsClickEvent.current
   var isUserInteracting by remember { mutableStateOf(false) }
   var userPosition by remember { mutableFloatStateOf(position()) }
+  val previewRepository = koinInject<SeekPreviewRepository>()
+  val previewRevision by previewRepository.cacheRevision.collectAsState()
+  var previewBitmap by remember(previewPath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+  val previewAlpha = remember { Animatable(0f) }
+
+  LaunchedEffect(previewPath, duration, userPosition, isUserInteracting, previewRevision) {
+    if (isUserInteracting && previewPath != null && duration > 0f) {
+      previewBitmap = previewRepository.frameAt(previewPath, duration, userPosition)
+    }
+  }
+
+  LaunchedEffect(isUserInteracting, previewBitmap) {
+    if (isUserInteracting && previewBitmap != null) {
+      previewAlpha.animateTo(1f, tween(100))
+    } else if (!isUserInteracting) {
+      delay(350)
+      previewAlpha.animateTo(0f, tween(250))
+    }
+  }
 
   // Animated position for smooth transitions
   val animatedPosition = remember { Animatable(position()) }
@@ -215,18 +242,52 @@ fun SeekbarWithTimers(
     )
 
     // Seekbar
-    Box(
+    BoxWithConstraints(
       modifier =
         Modifier
           .weight(1f)
-          .height(48.dp)
-          .graphicsLayer {
-            scaleY = squeezeScale
-          },
+          .height(48.dp),
       contentAlignment = Alignment.Center,
     ) {
+      if (previewBitmap != null && previewAlpha.value > 0f && duration > 0f) {
+        val previewWidth = minOf(maxWidth, 160.dp)
+        val progress = (userPosition / duration).coerceIn(0f, 1f)
+        val previewX = (maxWidth * progress - previewWidth / 2).coerceIn(0.dp, maxWidth - previewWidth)
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.TopStart)
+              .offset(x = previewX, y = (-104).dp)
+              .width(previewWidth)
+              .requiredHeight(96.dp)
+              .graphicsLayer { alpha = previewAlpha.value }
+              .background(Color.Black, RoundedCornerShape(6.dp))
+              .padding(2.dp),
+        ) {
+          Image(
+            bitmap = previewBitmap!!.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+          )
+          Text(
+            text = Utils.prettyTime(userPosition.toInt(), false),
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            modifier =
+              Modifier
+                .align(Alignment.BottomCenter)
+                .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(3.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+          )
+        }
+      }
 
-      when (seekbarStyle) {
+      Box(
+        modifier = Modifier.fillMaxSize().graphicsLayer { scaleY = squeezeScale },
+        contentAlignment = Alignment.Center,
+      ) {
+        when (seekbarStyle) {
         SeekbarStyle.Standard -> {
           StandardSeekbar(
             position = { if (isUserInteracting) userPosition else animatedPosition.value },
@@ -342,6 +403,7 @@ fun SeekbarWithTimers(
           )
         }
 
+        }
       }
     }
 

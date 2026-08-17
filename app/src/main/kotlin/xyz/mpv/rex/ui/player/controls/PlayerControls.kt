@@ -1338,7 +1338,8 @@ fun PlayerControls(
             loopStart = abLoopA?.toFloat(),
             loopEnd = abLoopB?.toFloat(),
             isGestureSeeking = isGestureSeeking,
-            isCancelActive = isCloseToStart
+            isCancelActive = isCloseToStart,
+            previewPath = mediaPath,
           )
         }
 
