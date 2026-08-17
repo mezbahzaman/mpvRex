@@ -199,6 +199,7 @@ fun PlayerControls(
   val duration by MPVLib.propInt["duration"].collectAsState()
   val position by MPVLib.propInt["time-pos"].collectAsState()
   val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
+  val demuxerCacheTime by MPVLib.propFloat["demuxer-cache-time"].collectAsState()
   val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
   val mediaPath by MPVLib.propString["path"].collectAsState()
   val precisePosition by viewModel.precisePosition.collectAsState()
@@ -215,7 +216,6 @@ fun PlayerControls(
     streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
   val streamInfoVisible =
     streamStats.isNetwork && (streamStatsPanelVisible || streamInfoAutoVisible)
-
   val doubleTapSeekAmount by viewModel.doubleTapSeekAmount.collectAsState()
   val doubleTapSeekBasePos by viewModel.doubleTapSeekBasePos.collectAsState()
   val showDoubleTapOvals by playerPreferences.showDoubleTapOvals.collectAsState()
@@ -1271,34 +1271,18 @@ fun PlayerControls(
 
           // Calculate read-ahead position (current position + buffered cache time)
           // No keys for remember, derivedStateOf reactively tracks read dependencies
-          val readAheadPosition by remember {
-            derivedStateOf {
-              val currentPos = position?.toFloat() ?: 0f
-              val cacheDuration = demuxerCacheDuration ?: 0f
-              val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
-
-              // Media opened from disk (or a content/file URI) is always read
-              // ahead by the demuxer, so a "buffered" indicator would just fill
-              // the whole bar. Only show it for real network streams.
-              val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
-              val isNetworkMedia = mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
-
-              if (!isNetworkMedia) {
-                // Local file: no buffered-content indicator.
-                currentPos.coerceAtMost(totalDuration)
-              } else {
-                // Network stream: show the REAL amount buffered by the demuxer
-                // cache, and nothing else. While (re)buffering the cache is
-                // depleted, so there is nothing playable ahead of the current
-                // position yet — hide the indicator instead of fabricating a
-                // fake buffer that looked like progress while the stream stalled.
-                if (cacheDuration > 0.1f) {
-                  (currentPos + cacheDuration).coerceAtMost(totalDuration)
-                } else {
-                  currentPos.coerceAtMost(totalDuration)
-                }
-              }
-            }
+          val currentPos = precisePosition.takeIf { it >= 0f } ?: position?.toFloat() ?: 0f
+          val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
+          val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
+          val isNetworkMedia = mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
+          val cacheEnd = demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPos }
+            ?: demuxerCacheDuration
+              ?.takeIf { it.isFinite() && it > 0.1f }
+              ?.let { currentPos + it }
+          val readAheadPosition = if (isNetworkMedia) {
+            maxOf(currentPos, cacheEnd ?: currentPos).coerceAtMost(totalDuration)
+          } else {
+            currentPos.coerceAtMost(totalDuration)
           }
 
           SeekbarWithTimers(

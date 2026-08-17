@@ -69,6 +69,37 @@ class HybridMediaIndexRepositoryTest {
   }
 
   @Test
+  fun flatFolders_fallBackToLegacyFilenamePlaybackState() = runTest {
+    val item = media(
+      identity = "file:/storage/A/clip.mp4",
+      location = "/storage/A/clip.mp4",
+      parent = "/storage/A",
+    )
+    coEvery { dao.getAvailableMedia(true) } returns listOf(item)
+
+    val folders = repository.getFlatFolders(
+      playbackStates = listOf(
+        PlaybackStateEntity(
+          mediaTitle = item.displayName,
+          lastPosition = 100,
+          playbackSpeed = 1.0,
+          sid = -1,
+          subDelay = 0,
+          subSpeed = 1.0,
+          aid = -1,
+          audioDelay = 0,
+          hasBeenWatched = true,
+        ),
+      ),
+      thresholdDays = 7,
+      watchedThreshold = 95,
+      includeNoMedia = true,
+    )
+
+    assertEquals(0, folders.single().unwatchedVideoCount)
+  }
+
+  @Test
   fun noMediaPolicyIsAppliedWhenReadingPersistentIndex() = runTest {
     coEvery { dao.getAvailableMedia(false) } returns emptyList()
 
@@ -168,4 +199,3 @@ class HybridMediaIndexRepositoryTest {
     lastSeenGeneration = 1,
   )
 }
-

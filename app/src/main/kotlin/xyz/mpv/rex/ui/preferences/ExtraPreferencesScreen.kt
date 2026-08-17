@@ -79,6 +79,7 @@ object ExtraPreferencesScreen : Screen {
       ValidatedNumberDialog(
         title = stringResource(setting.titleRes),
         initialValue = setting.value,
+        minimumValue = setting.minimumValue,
         onDismiss = { numberDialog = null },
         onSave = {
           setting.save(it)
@@ -138,12 +139,17 @@ object ExtraPreferencesScreen : Screen {
               PreferenceDivider()
               ValuePreference(
                 title = stringResource(R.string.pref_extra_maximum_buffered_seconds_title),
-                summary = stringResource(R.string.pref_extra_seconds_value, maximumBufferedSeconds),
+                summary = if (maximumBufferedSeconds == 0) {
+                  stringResource(R.string.pref_extra_time_threshold_disabled)
+                } else {
+                  stringResource(R.string.pref_extra_seconds_value, maximumBufferedSeconds)
+                },
                 onClick = {
                   numberDialog =
                     NumberSetting(
                       R.string.pref_extra_maximum_buffered_seconds_title,
                       maximumBufferedSeconds,
+                      0,
                       preferences.maximumBufferedSeconds::set,
                     )
                 },
@@ -151,12 +157,17 @@ object ExtraPreferencesScreen : Screen {
               PreferenceDivider()
               ValuePreference(
                 title = stringResource(R.string.pref_extra_maximum_network_download_title),
-                summary = stringResource(R.string.pref_extra_mib_value, maximumNetworkDownloadMiB),
+                summary = if (maximumNetworkDownloadMiB == 0) {
+                  stringResource(R.string.pref_extra_size_threshold_disabled)
+                } else {
+                  stringResource(R.string.pref_extra_mib_value, maximumNetworkDownloadMiB)
+                },
                 onClick = {
                   numberDialog =
                     NumberSetting(
                       R.string.pref_extra_maximum_network_download_title,
                       maximumNetworkDownloadMiB,
+                      0,
                       preferences.maximumNetworkDownloadMiB::set,
                     )
                 },
@@ -170,6 +181,7 @@ object ExtraPreferencesScreen : Screen {
                     NumberSetting(
                       R.string.pref_extra_stream_info_refresh_title,
                       streamInfoRefreshSeconds,
+                      1,
                       preferences.streamInfoRefreshSeconds::set,
                     )
                 },
@@ -242,6 +254,7 @@ object ExtraPreferencesScreen : Screen {
 private data class NumberSetting(
   val titleRes: Int,
   val value: Int,
+  val minimumValue: Int,
   val save: (Int) -> Unit,
 )
 
@@ -262,12 +275,13 @@ private fun ValuePreference(
 private fun ValidatedNumberDialog(
   title: String,
   initialValue: Int,
+  minimumValue: Int,
   onDismiss: () -> Unit,
   onSave: (Int) -> Unit,
 ) {
   var text by remember(initialValue) { mutableStateOf(initialValue.toString()) }
   val value = text.toIntOrNull()
-  val valid = value != null && value > 0
+  val valid = value != null && value >= minimumValue
   AlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(title) },
@@ -279,7 +293,17 @@ private fun ValidatedNumberDialog(
         isError = text.isNotEmpty() && !valid,
         supportingText =
           if (!valid) {
-            { Text(stringResource(R.string.pref_extra_positive_number_error)) }
+            {
+              Text(
+                stringResource(
+                  if (minimumValue == 0) {
+                    R.string.pref_extra_non_negative_number_error
+                  } else {
+                    R.string.pref_extra_positive_number_error
+                  },
+                ),
+              )
+            }
           } else {
             null
           },

@@ -334,6 +334,9 @@
     <string name="pref_extra_ping_host_title">Ping host</string>
     <string name="pref_extra_seconds_value">%1$d seconds</string>
     <string name="pref_extra_mib_value">%1$d MiB</string>
+    <string name="pref_extra_time_threshold_disabled">Disabled (no time threshold)</string>
+    <string name="pref_extra_size_threshold_disabled">Disabled (no size threshold)</string>
+    <string name="pref_extra_non_negative_number_error">Enter zero or a positive whole number</string>
     <string name="pref_extra_positive_number_error">Enter a whole number greater than zero</string>
     <string name="pref_extra_host_error">Enter a host without spaces</string>
     <string name="pref_extra_local_subtitles_section">Local Subtitles</string>

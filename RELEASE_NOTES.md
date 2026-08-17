@@ -1,9 +1,23 @@
-# mpvRex Stremio Edition 4.5.1
+# mpvRex Stremio Edition 4.5.2
 
 mpvRex Stremio Edition is a specialized build of
 [mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
 external player with Stremio. It retains the complete mpvRex playback experience
 and can also be used as a regular Android video player.
+
+## Fixes in 4.5.2
+
+- A zero network cache size or buffered-duration setting now disables only that
+  threshold. Positive size and time thresholds still stop read-ahead when either
+  limit is reached, and setting both to zero leaves read-ahead unrestricted by
+  these two settings.
+- Local playback state is keyed by the full file location, so files with the same
+  name in different folders no longer share watched status or resume data.
+  Existing filename-based playback records remain available as a fallback.
+- Watched and unwatched folder counts refresh after playback state is saved rather
+  than retaining scanner results for up to three minutes.
+- Network seekbars use MPV's buffered endpoint when available, with its buffered
+  duration as a fallback, so the range tracks the demuxer's current cache.
 
 ## Stremio integration
 

@@ -69,6 +69,7 @@ import xyz.mpv.rex.domain.media.model.Video
 import xyz.mpv.rex.utils.media.MediaFormatter
 import xyz.mpv.rex.utils.storage.FileTypeUtils
 import xyz.mpv.rex.utils.storage.FileFilterUtils
+import xyz.mpv.rex.repository.MediaFileRepository
 import xyz.mpv.rex.ui.player.SingleActionGesture
 import com.github.k1rakishou.fsaf.FileManager
 import `is`.xyz.mpv.MPVLib
@@ -221,6 +222,7 @@ class PlayerActivity :
    * For network streams, this includes a hash of the URI to ensure uniqueness.
    */
   private var mediaIdentifier = ""
+  private var legacyMediaIdentifier = ""
 
   /**
    * Helper for managing Picture-in-Picture mode.
@@ -471,7 +473,7 @@ class PlayerActivity :
       val mpvTitle = runCatching { MPVLib.getPropertyString("media-title") }.getOrNull()
       fileName = if (!mpvTitle.isNullOrBlank()) mpvTitle else (intent.data?.lastPathSegment ?: "Unknown Video")
     }
-    mediaIdentifier = getMediaIdentifier(intent, fileName)
+    updateMediaIdentifiers(intent, fileName)
 
     // Set HTTP headers (including referer) BEFORE playing the file
     setHttpHeadersFromExtras(intent.extras)
@@ -1700,7 +1702,10 @@ class PlayerActivity :
     val targetFileName = getFileName(targetIntent).ifBlank { targetIntent.data?.lastPathSegment ?: "Unknown Video" }
     lifecycleScope.launch(Dispatchers.IO) {
       if (orient == PlayerOrientation.Smart) {
-        val state = playbackStateRepository.getVideoDataByTitle(targetFileName)
+        val targetIdentifier = getMediaIdentifier(targetIntent, targetFileName)
+        val state = playbackStateRepository.getVideoDataByTitle(targetIdentifier)
+          ?: targetFileName.takeIf { it != targetIdentifier }
+            ?.let { playbackStateRepository.getVideoDataByTitle(it) }
         if (state?.savedOrientation != null && state.savedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
           withContext(Dispatchers.Main) {
             requestedOrientation = state.savedOrientation!!
@@ -1989,10 +1994,10 @@ class PlayerActivity :
       if (fileName.isBlank()) {
         fileName = intent.data?.lastPathSegment ?: "Unknown Video"
       }
-      mediaIdentifier = getMediaIdentifier(intent, fileName)
+      updateMediaIdentifiers(intent, fileName)
     } else if (mediaIdentifier.isBlank()) {
       // If fileName was already set, but mediaIdentifier is missing, set it for safety
-      mediaIdentifier = getMediaIdentifier(intent, fileName)
+      updateMediaIdentifiers(intent, fileName)
     }
 
     // Start media notification service only when going to background (like stock mpv-android)
@@ -2419,6 +2424,7 @@ class PlayerActivity :
    */
   private fun saveVideoPlaybackState(mediaTitle: String) {
     val identifier = mediaIdentifier
+    val legacyIdentifier = legacyMediaIdentifier
     if (identifier.isBlank()) return
 
     // Capture current playback state before switching files
@@ -2443,6 +2449,8 @@ class PlayerActivity :
     savePlaybackStateJob = lifecycleScope.launch(Dispatchers.IO) {
       runCatching {
         val oldState = playbackStateRepository.getVideoDataByTitle(identifier)
+          ?: legacyIdentifier.takeIf { it.isNotBlank() && it != identifier }
+            ?.let { playbackStateRepository.getVideoDataByTitle(it) }
         Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $identifier) at position: $currentPos")
 
         val watchedThreshold = browserPreferences.watchedThreshold.get()
@@ -2496,6 +2504,7 @@ class PlayerActivity :
             },
           ),
         )
+        MediaFileRepository.clearCache()
       }.onFailure { e ->
         Log.e(TAG, "Error saving playback state", e)
       }
@@ -2513,6 +2522,8 @@ class PlayerActivity :
 
     return runCatching {
       val state = playbackStateRepository.getVideoDataByTitle(mediaIdentifier)
+        ?: legacyMediaIdentifier.takeIf { it.isNotBlank() && it != mediaIdentifier }
+          ?.let { playbackStateRepository.getVideoDataByTitle(it) }
       loadedPlaybackState = state
 
       applyPlaybackState(state)
@@ -2774,7 +2785,7 @@ class PlayerActivity :
     if (fileName.isBlank()) {
       fileName = intent.data?.lastPathSegment ?: "Unknown Video"
     }
-    mediaIdentifier = getMediaIdentifier(intent, fileName)
+    updateMediaIdentifiers(intent, fileName)
 
     // Synchronously set orientation for the new file before displaying activity
     applyInitialOrientationFromIntent(intent)
@@ -3734,7 +3745,7 @@ class PlayerActivity :
     val customTitle = viewModel.playlistManager.getTitleAt(index)
     fileName = if (!customTitle.isNullOrBlank()) customTitle else getFileNameFromUri(uri)
     // Generate new media identifier for playback state
-    mediaIdentifier = getMediaIdentifierFromUri(uri, fileName)
+    updateMediaIdentifiers(uri, fileName)
 
     val cachedDurationMs = viewModel.playlistManager.getDurationAt(index)
     val fastDurationMs = if (cachedDurationMs > 0L) cachedDurationMs else getFastDurationMsForUri(uri)
@@ -4029,7 +4040,7 @@ class PlayerActivity :
   /**
    * Generate a unique identifier for this media for playback state/history.
    *
-   * For local/offline files, uses fileName (display name or path).
+   * For local/offline files, uses the resolved path or original content URI.
    * For network streams via proxy (SMB/WebDAV/FTP), uses the stable network file path from intent extras.
    * For other network URIs (http/https/rtmp/etc.), uses a hash of the URI string to distinguish different streams.
    */
@@ -4050,27 +4061,54 @@ class PlayerActivity :
     }
 
     val uri = extractUriFromIntent(intent)
-    return if (uri != null && (uri.scheme?.startsWith("http") == true || uri.scheme == "rtmp" || uri.scheme == "ftp" || uri.scheme == "rtsp" || uri.scheme == "mms")) {
+    return if (uri != null && StreamTuning.isNetworkUri(uri.toString())) {
       // For remote protocols: hash the URI so position is per-episode or per-stream.
       "${fileName}_${uri.toString().hashCode()}"
     } else {
-      // For local/file uris and unknown: just use fileName.
-      fileName
+      when (uri?.scheme) {
+        "content" -> getStableLocalMediaIdentifier(uri)
+        "file" -> uri.path?.let { path -> runCatching { File(path).canonicalPath }.getOrDefault(path) } ?: uri.toString()
+        else -> parsePathFromIntent(intent) ?: uri?.toString() ?: fileName
+      }
     }
   }
 
   /**
    * Generate a unique identifier for this media from a URI and name.
    *
-   * For local/offline files, uses fileName (display name or path).
+   * For local/offline files, uses the resolved path or original content URI.
    * For network URIs (http/https/rtmp/etc.), uses a hash of the URI string to distinguish different streams.
    */
   private fun getMediaIdentifierFromUri(uri: Uri, fileName: String): String {
-    return if (uri.scheme?.startsWith("http") == true || uri.scheme == "rtmp" || uri.scheme == "ftp" || uri.scheme == "rtsp" || uri.scheme == "mms") {
+    return if (StreamTuning.isNetworkUri(uri.toString())) {
       "${fileName}_${uri.toString().hashCode()}"
     } else {
-      fileName
+      when (uri.scheme) {
+        "content" -> getStableLocalMediaIdentifier(uri)
+        "file" -> uri.path?.let { path -> runCatching { File(path).canonicalPath }.getOrDefault(path) } ?: uri.toString()
+        else -> uri.toString()
+      }
     }
+  }
+
+  private fun updateMediaIdentifiers(intent: Intent, fileName: String) {
+    mediaIdentifier = getMediaIdentifier(intent, fileName)
+    legacyMediaIdentifier = fileName
+  }
+
+  private fun updateMediaIdentifiers(uri: Uri, fileName: String) {
+    mediaIdentifier = getMediaIdentifierFromUri(uri, fileName)
+    legacyMediaIdentifier = fileName
+  }
+
+  private fun getStableLocalMediaIdentifier(uri: Uri): String {
+    val path = runCatching {
+      contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+        val column = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+        if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+      }
+    }.getOrNull()
+    return path?.let { runCatching { File(it).canonicalPath }.getOrDefault(it) } ?: uri.toString()
   }
 
   private fun generatePlaylistFromMediaLibrary(currentPath: String) {
