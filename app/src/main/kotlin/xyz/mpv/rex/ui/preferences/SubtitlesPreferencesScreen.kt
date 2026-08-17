@@ -65,6 +65,7 @@ import xyz.mpv.rex.presentation.Screen
 import xyz.mpv.rex.ui.utils.LocalBackStack
 import xyz.mpv.rex.utils.media.CustomFontEntry
 import xyz.mpv.rex.utils.media.copyFontsFromDirectory
+import xyz.mpv.rex.utils.media.copyBundledSubtitleFonts
 import xyz.mpv.rex.utils.media.loadCustomFontEntries
 import com.github.k1rakishou.fsaf.FileManager
 import kotlinx.coroutines.Dispatchers
@@ -88,6 +89,7 @@ object SubtitlesPreferencesScreen : Screen {
   @Composable
   override fun Content() {
     val context = LocalContext.current
+    remember { copyBundledSubtitleFonts(context) }
     val backstack = LocalBackStack.current
     val preferences = koinInject<SubtitlesPreferences>()
     val fileManager = koinInject<FileManager>()

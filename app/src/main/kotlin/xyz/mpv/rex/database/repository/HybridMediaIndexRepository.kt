@@ -729,7 +729,7 @@ class HybridMediaIndexRepository(
     var newCount = 0
     var unwatchedCount = 0
     items.forEach { item ->
-      val state = stateByIdentity[item.location]
+      val state = stateByIdentity[item.location] ?: stateByIdentity[item.displayName]
       val watched = state?.hasBeenWatched == true ||
         (state != null && item.duration > 0 && state.timeRemaining >= 0 &&
           ((item.duration / 1000 - state.timeRemaining).toFloat() / (item.duration / 1000).coerceAtLeast(1)) >= watchedThreshold / 100f)

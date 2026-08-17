@@ -15,6 +15,7 @@ import xyz.mpv.rex.preferences.SubtitlesPreferences
 import xyz.mpv.rex.domain.anime4k.Anime4KManager
 import xyz.mpv.rex.ui.player.PlayerActivity.Companion.TAG
 import xyz.mpv.rex.ui.player.controls.components.panels.toColorHexString
+import xyz.mpv.rex.utils.media.copyBundledSubtitleFonts
 import `is`.xyz.mpv.BaseMPVView
 import `is`.xyz.mpv.KeyMapping
 import `is`.xyz.mpv.MPVLib
@@ -127,11 +128,10 @@ class MPVView(
       MPVLib.setOptionString("gpu-context", "androidvk")
     }
 
-    // Set hwdec with fallback order: HW+ (mediacodec) -> SW (no)
-    // mediacodec-copy (HW) is omitted as it often causes Surface-related crashes on certain devices
+    // Decoder fallback order: HW+ (zero-copy) -> HW (copy-back) -> SW.
     MPVLib.setOptionString(
       "hwdec",
-      if (decoderPreferences.tryHWDecoding.get()) "mediacodec-copy,mediacodec,no" else "no",
+      if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
     )
     MPVLib.setOptionString("hwdec-codecs", "all")
 
@@ -295,7 +295,9 @@ class MPVView(
       "volume" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
       "hwdec-current" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
       "media-title" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
+      "path" to MPVLib.MpvFormat.MPV_FORMAT_STRING,
       "demuxer-cache-duration" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
+      "demuxer-cache-time" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
       "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
       "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
       "sub-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
@@ -341,6 +343,8 @@ class MPVView(
 
   // Setup
   private fun setupSubtitlesOptions() {
+    copyBundledSubtitleFonts(context)
+
     // Disable MPV's automatic subtitle selection
     // App will handle track selection manually via TrackSelector to respect user choices
     MPVLib.setOptionString("slang", "")
