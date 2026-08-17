@@ -182,6 +182,11 @@
     <string name="pref_player_custom_skip_duration_summary">Duration to skip forward on custom skip button</string>
     <string name="pref_player_seeking_title">Seeking</string>
     <string name="pref_player_close_after_eof">Close after the end of playback</string>
+    <string name="buffering_percent">Buffering %1$d%%</string>
+    <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
+    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$d ms • %5$s</string>
+    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$d ms • %6$s</string>
+    <string name="stream_stats_line_http">%1$ds buffered • %2$d ms • %3$s</string>
     <string name="pref_player_remember_brightness">Remember display brightness</string>
 
     <string name="pref_player_gestures">Gestures</string>
@@ -280,6 +285,8 @@
     <string name="pref_subtitles_disable_by_default_summary">Subtitles will not appear unless you manually enable them during playback.</string>
     <string name="pref_subtitles_autoload_title">Automatically load subtitles</string>
     <string name="pref_subtitles_autoload_summary">Automatically load external subtitles with the same name.</string>
+    <string name="pref_subtitles_auto_stremio_title">Auto-download subtitles for Stremio streams</string>
+    <string name="pref_subtitles_auto_stremio_summary">When a Stremio stream has no embedded subtitles, automatically search for and load the best-matching subtitle.</string>
     <string name="pref_subtitles_open_at_video_location_title">Open at video location</string>
     <string name="pref_subtitles_open_at_video_location_summary">Open file picker in the same folder as the current video</string>
     <string name="pref_subtitles_custom_picker_folder_title">Default selection folder</string>
@@ -318,6 +325,27 @@
 
     <string name="pref_advanced">Advanced</string>
     <string name="pref_advanced_summary">Configuration location, mpv.conf</string>
+    <string name="pref_extra_settings_title">Extra Settings</string>
+    <string name="pref_extra_settings_summary">Streaming limits, connectivity, and local subtitles</string>
+    <string name="pref_extra_streaming_section">Streaming &amp; Network</string>
+    <string name="pref_extra_maximum_buffered_seconds_title">Maximum Allowed Buffered Seconds</string>
+    <string name="pref_extra_maximum_network_download_title">Maximum Allowed Network Stream Download</string>
+    <string name="pref_extra_stream_info_refresh_title">Stream info refresh interval</string>
+    <string name="pref_extra_ping_host_title">Ping host</string>
+    <string name="pref_extra_seconds_value">%1$d seconds</string>
+    <string name="pref_extra_mib_value">%1$d MiB</string>
+    <string name="pref_extra_time_threshold_disabled">Disabled (no time threshold)</string>
+    <string name="pref_extra_size_threshold_disabled">Disabled (no size threshold)</string>
+    <string name="pref_extra_non_negative_number_error">Enter zero or a positive whole number</string>
+    <string name="pref_extra_positive_number_error">Enter a whole number greater than zero</string>
+    <string name="pref_extra_host_error">Enter a host without spaces</string>
+    <string name="pref_extra_local_subtitles_section">Local Subtitles</string>
+    <string name="pref_extra_auto_local_subtitles_title">Auto-download subtitles for local files</string>
+    <string name="pref_extra_auto_local_subtitles_summary">Search Wyzie when a local video has no embedded or loaded subtitles. Camera videos are always skipped.</string>
+    <string name="pref_extra_excluded_folders_title">Excluded Folders</string>
+    <string name="pref_extra_add_excluded_folder_title">Add excluded folder</string>
+    <string name="pref_extra_add_excluded_folder_summary">Automatic online subtitle search will be skipped in selected folders</string>
+    <string name="pref_extra_remove_excluded_folder">Remove excluded folder</string>
     <string name="pref_advanced_mpv_conf_storage_location">Pick configuration storage location</string>
     <string name="config_editor_unsaved_changes">Unsaved changes</string>
     <string name="config_editor_no_storage_location">No storage location set</string>
@@ -1025,6 +1053,7 @@
     <string name="btn_label_background_playback">Background Playback</string>
     <string name="btn_label_ambient_mode">Ambience Mode</string>
     <string name="btn_label_sleep_timer">Sleep Timer</string>
+    <string name="btn_label_stream_info">Stream Info</string>
     <string name="btn_label_none">None</string>
 
 

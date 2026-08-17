@@ -4,6 +4,7 @@ import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import xyz.mpv.rex.BuildConfig
@@ -43,6 +44,7 @@ import org.koin.core.component.inject
  * bypassing MediaUtils.
  */
 object MediaUtils : KoinComponent {
+  private val context: Context by inject()
   private val metadataCache: VideoMetadataCacheRepository by inject()
   private val playbackStateRepository: PlaybackStateRepository by inject()
   private val playerPreferences: PlayerPreferences by inject()
@@ -105,7 +107,9 @@ object MediaUtils : KoinComponent {
             // Better would be to make playFile suspend, but that requires UI changes everywhere
             kotlinx.coroutines.runBlocking {
               // 1. Check for saved orientation in DB
-              val state = playbackStateRepository.getVideoDataByTitle(fileName)
+              val identifier = runCatching { file.canonicalPath }.getOrElse { file.absoluteFile.normalize().path }
+              val state = playbackStateRepository.getVideoDataByTitle(identifier)
+                ?: playbackStateRepository.getVideoDataByTitle(fileName)
               if (state?.savedOrientation != null) {
                 it.putExtra("saved_orientation", state.savedOrientation)
               }
@@ -130,7 +134,9 @@ object MediaUtils : KoinComponent {
           if (file.exists() && !xyz.mpv.rex.utils.storage.FileTypeUtils.isAudioFile(file)) {
             val fileName = file.name
             kotlinx.coroutines.runBlocking {
-              val state = playbackStateRepository.getVideoDataByTitle(fileName)
+              val identifier = runCatching { file.canonicalPath }.getOrElse { file.absoluteFile.normalize().path }
+              val state = playbackStateRepository.getVideoDataByTitle(identifier)
+                ?: playbackStateRepository.getVideoDataByTitle(fileName)
               if (state?.savedOrientation != null) {
                 it.putExtra("saved_orientation", state.savedOrientation)
               }
@@ -318,9 +324,32 @@ object MediaUtils : KoinComponent {
     launchSource: String? = null,
     playlistId: Int? = null,
   ) {
+    val resumeIdentifier = uris[startIndex].let { uri ->
+      when (uri.scheme) {
+        "file" -> canonicalPath(uri.path.orEmpty())
+        "content" -> {
+          val path = runCatching {
+            context.contentResolver.query(
+              uri,
+              arrayOf(MediaStore.MediaColumns.DATA),
+              null,
+              null,
+              null,
+            )?.use { cursor ->
+              val column = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+              if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+            }
+          }.getOrNull()
+          path?.let(::canonicalPath) ?: uri.toString()
+        }
+        else -> title
+      }
+    }
     val resumeSec = kotlinx.coroutines.runBlocking {
       runCatching {
-        playbackStateRepository.getVideoDataByTitle(title)?.lastPosition ?: 0
+        playbackStateRepository.getVideoDataByTitle(resumeIdentifier)?.lastPosition
+          ?: playbackStateRepository.getVideoDataByTitle(title)?.lastPosition
+          ?: 0
       }.getOrDefault(0)
     }
     headlessPlaybackController.startHeadless(
@@ -332,6 +361,11 @@ object MediaUtils : KoinComponent {
       launchSource = launchSource ?: "direct_mini_player",
       playlistId = playlistId,
     )
+  }
+
+  private fun canonicalPath(path: String): String {
+    val file = File(path)
+    return runCatching { file.canonicalPath }.getOrElse { file.absoluteFile.normalize().path }
   }
 
   private fun deriveTitle(uri: Uri, source: Any): String = when (source) {
