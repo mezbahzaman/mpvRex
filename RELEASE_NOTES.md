@@ -1,20 +1,9 @@
-# mpvRex Stremio Edition 4.5.3
+# mpvRex Stremio Edition 4.5.2
 
 mpvRex Stremio Edition is a specialized build of
 [mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
 external player with Stremio. It retains the complete mpvRex playback experience
 and can also be used as a regular Android video player.
-
-## New in 4.5.3
-
-- Dragging any seekbar style now shows a timeline thumbnail with the target time.
-  The preview follows the scrub position and fades automatically after release.
-- Preview frames are generated progressively across the complete media timeline
-  using an independent decoder, so generation does not seek or interrupt playback.
-- Local files, direct HTTP streams, and Stremio P2P proxy streams share the same
-  preview behavior. Unknown-duration media falls back to the normal seekbar.
-- Each media preview cache has a hard 3 MiB image budget and retains only three
-  recent media caches, keeping repeat playback fast without unbounded storage use.
 
 ## Fixes in 4.5.2
 
