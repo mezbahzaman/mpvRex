@@ -40298,14 +40298,15 @@ index 0000000..6f95c08
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
 new file mode 100644
-index 0000000..79389cf
+index 0000000..ae9a375
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,92 @@
 +package xyz.mpv.rex.utils.media
 +
 +import android.net.Uri
 +import `is`.xyz.mpv.MPVLib
++import java.net.URI
 +
 +/**
 + * Applies mpv options that improve playback smoothness for network and P2P (torrent)
@@ -40333,7 +40334,7 @@ index 0000000..79389cf
 +  }
 +
 +  fun isAdaptiveManifestUri(uri: String): Boolean {
-+    val path = runCatching { Uri.parse(uri).path }.getOrNull()?.lowercase() ?: return false
++    val path = runCatching { URI(uri).path }.getOrNull()?.lowercase() ?: return false
 +    return path.endsWith(".m3u8") || path.endsWith(".mpd")
 +  }
 +
