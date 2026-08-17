@@ -91,7 +91,7 @@ class UpdateManager(
             return null
         }
         
-        val release = getLatestRelease("https://api.github.com/repos/sfsakhawat999/mpvRex/releases/latest")
+        val release = getLatestRelease("https://api.github.com/repos/mezbahzaman/mpvRex/releases/latest")
         val currentVersion = BuildConfig.VERSION_NAME.replace("-dev", "")
         val remoteVersion = release.tagName.removePrefix("v")
         val prefs = context.getSharedPreferences("mpvEx_prefs", Context.MODE_PRIVATE)
@@ -131,9 +131,17 @@ class UpdateManager(
     }
 
     private fun isNewerVersion(remote: String, current: String): Boolean {
-        val rParts = remote.split(".").map { it.toIntOrNull() ?: 0 }
-        val cParts = current.split(".").map { it.toIntOrNull() ?: 0 }
-        
+        fun normalize(version: String): List<Int>? {
+            val normalized = version.trim().removePrefix("v")
+            val match = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)(?:-(?:stable|dev))?$").matchEntire(normalized)
+                ?: return null
+            return match.groupValues.drop(1).mapNotNull { it.toIntOrNull() }
+                .takeIf { it.size == 3 }
+        }
+
+        val rParts = normalize(remote) ?: return false
+        val cParts = normalize(current) ?: return false
+
         for (i in 0 until maxOf(rParts.size, cParts.size)) {
             val r = rParts.getOrElse(i) { 0 }
             val c = cParts.getOrElse(i) { 0 }

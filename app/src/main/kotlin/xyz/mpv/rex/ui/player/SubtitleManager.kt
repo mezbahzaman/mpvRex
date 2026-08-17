@@ -82,7 +82,7 @@ class SubtitleManager(
         _isOnlineSectionExpanded.value = !_isOnlineSectionExpanded.value
     }
 
-    fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false) {
+    fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false, expectedMediaPath: String? = null) {
         val uriString = uri.toString()
         if (_externalSubtitles.contains(uriString)) {
             Log.d(TAG, "Subtitle already tracked, skipping: $uriString")
@@ -109,7 +109,9 @@ class SubtitleManager(
 
         scope.launch(Dispatchers.IO) {
             runCatching {
+                if (expectedMediaPath != null && MPVLib.getPropertyString("path") != expectedMediaPath) return@runCatching
                 val mpvPath = uri.resolveUri(context) ?: uri.toString()
+                if (expectedMediaPath != null && MPVLib.getPropertyString("path") != expectedMediaPath) return@runCatching
                 val mode = if (select) "select" else "auto"
                 
                 // Store mapping for reliable physical deletion later

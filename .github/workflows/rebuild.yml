@@ -1,0 +1,152 @@
+name: Build patched mpvRex (stable, arm64, auto-update)
+
+# Rebuilds the patched mpvRex on top of the latest upstream MASTER commit.
+# Runs daily, plus on demand. Skips automatically when the current upstream
+# commit was already built and published.
+# Requires repo secrets: RELEASE_KEYSTORE_B64 (base64 of mpvrex-release.keystore),
+# KEYSTORE_PASSWORD, KEY_PASSWORD.
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: patched-stable-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: patched
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Find latest upstream master
+        id: base
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/sfsakhawat999/mpvRex
+          timeout 300 git fetch upstream master
+          BASE=$(git rev-parse upstream/master)
+          PATCH=$(git rev-parse HEAD)
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "patch=$PATCH" >> "$GITHUB_OUTPUT"
+          echo "Upstream master: $(git rev-parse --short $BASE)"
+
+      - name: Skip if this upstream commit was already built
+        id: existing
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+          PATCH: ${{ steps.base.outputs.patch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REL=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.body')
+          if echo "$REL" | grep -q "Upstream: $BASE" && echo "$REL" | grep -q "Patch: $PATCH"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release already built from upstream $BASE at patch $PATCH - nothing to do."
+          else
+            echo "No matching release yet - rebuilding."
+          fi
+
+      - name: Apply Stremio patch on latest upstream
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          cp patched.patch /tmp/patched.patch
+          cp .github/workflows/rebuild.yml /tmp/rebuild.yml
+          cp RELEASE_NOTES.md /tmp/RELEASE_NOTES.md
+          cp README.md /tmp/README.md
+          git checkout -B patched "$BASE"
+          git reset --hard "$BASE"
+          git apply --3way /tmp/patched.patch
+          if ! grep -q '"-stable"' app/build.gradle.kts; then
+            sed -i 's/versionName = "\([^"]*\)"/versionName = "\1-stable"/' app/build.gradle.kts
+          fi
+          mkdir -p .github/workflows
+          cp /tmp/rebuild.yml .github/workflows/rebuild.yml
+          cp /tmp/patched.patch patched.patch
+          cp /tmp/RELEASE_NOTES.md RELEASE_NOTES.md
+          cp /tmp/README.md README.md
+          git config user.name patcher
+          git config user.email patcher@local
+          git add -A
+          git commit -m "Apply Stremio stable patch on $BASE" || true
+
+      - name: Setup JDK
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        if: steps.existing.outputs.skip != 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdk_status=${PIPESTATUS[1]}
+          set -o pipefail
+          test "$sdk_status" -eq 0
+          set +o pipefail
+          yes | sdkmanager "platforms;android-36" "build-tools;36.0.0" >/dev/null
+          sdk_status=${PIPESTATUS[1]}
+          set -o pipefail
+          test "$sdk_status" -eq 0
+
+      - name: Setup Gradle cache
+        if: steps.existing.outputs.skip != 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore signing keystore
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: echo "$RELEASE_KEYSTORE_B64" | base64 -d > mpvrex-release.keystore
+
+      - name: Build APK
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew --console=plain :app:testDebugUnitTest :app:assembleRelease \
+            -PreleaseKeyStore="$PWD/mpvrex-release.keystore" \
+            -PreleaseKeyStorePassword="$KEYSTORE_PASSWORD" \
+            -PreleaseKeyAlias=mpvrex \
+            -PreleaseKeyPassword="$KEY_PASSWORD"
+          git push -f origin patched
+
+      - name: Publish release
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          BASEVER=$(echo "$VER" | sed 's/-stable$//')
+          PATCH=$(git rev-parse HEAD)
+          cp "app/build/outputs/apk/release/app-arm64-v8a-release.apk" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk"
+          test -n "$VER"
+          printf '%s\n' "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-stable$'
+          test -f "mpvRex-${BASEVER}-arm64-v8a-stremio.apk"
+          sha256sum "mpvRex-${BASEVER}-arm64-v8a-stremio.apk" > "mpvRex-${BASEVER}-arm64-v8a-stremio.apk.sha256"
+          { cat RELEASE_NOTES.md; echo ""; echo "Upstream: $BASE"; echo "Patch: $PATCH"; } > /tmp/notes.md
+          gh release create "v${VER}" "mpvRex-${BASEVER}-arm64-v8a-stremio.apk" \
+            "mpvRex-${BASEVER}-arm64-v8a-stremio.apk.sha256" \
+            --repo "${{ github.repository }}" \
+            --title "mpvRex-Stable $VER (patched)" \
+            --notes-file /tmp/notes.md

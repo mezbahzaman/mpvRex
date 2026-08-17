@@ -17,8 +17,8 @@ android {
     applicationId = "xyz.mpv.rex"
     minSdk = 26
     targetSdk = 36
-    versionCode = 210
-    versionName = "4.5.0"
+    versionCode = 220
+    versionName = "4.6.8-stable"
 
     vectorDrawables {
       useSupportLibrary = true
@@ -40,8 +40,8 @@ android {
     abi {
       isEnable = true
       reset()
-      include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-      isUniversalApk = true
+      include("arm64-v8a")
+      isUniversalApk = false
     }
   }
 
