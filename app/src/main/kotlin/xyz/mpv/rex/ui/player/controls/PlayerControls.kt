@@ -212,8 +212,7 @@ fun PlayerControls(
   val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
 
   val streamInfoAutoVisible =
-    streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
-      (pausedForCache == true || (coreIdle == true && eofReached != true))
+    streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
   val streamInfoVisible =
     streamStats.isNetwork && (streamStatsPanelVisible || streamInfoAutoVisible)
 
@@ -1985,6 +1984,7 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
               streamStats.seeds,
               streamStats.peers,
               swarmSeeds,
+              streamStats.pingMs,
               speedText,
             )
           } else {
@@ -1993,11 +1993,12 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
               bufferedSeconds,
               streamStats.seeds,
               streamStats.peers,
+              streamStats.pingMs,
               speedText,
             )
           }
         } else {
-          stringResource(R.string.stream_stats_line_http, bufferedSeconds, speedText)
+          stringResource(R.string.stream_stats_line_http, bufferedSeconds, streamStats.pingMs, speedText)
         }
       Text(
         text = line,

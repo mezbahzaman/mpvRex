@@ -2322,6 +2322,10 @@ class PlayerViewModel(
   private var lastCachePausePos = 0.0
   private var lastDiagLogMs = 0L
   private var lastVideoPlaying = false
+  private var pingMs = 0
+  private var lastPingPollMs = 0L
+  private var pingPollInFlight = false
+  private val pingPollIntervalMs = 5_000L
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2572,6 +2576,8 @@ class PlayerViewModel(
       _streamInfoDismissed.value = false
       _streamInfoAutoConsumed.value = false
       lastVideoPlaying = false
+      pingMs = 0
+      lastPingPollMs = 0L
       lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
       lastHttpSampleMs = SystemClock.elapsedRealtime()
     }
@@ -2588,6 +2594,8 @@ class PlayerViewModel(
       _streamInfoDismissed.value = false
       _streamInfoAutoConsumed.value = false
       lastVideoPlaying = false
+      pingMs = 0
+      lastPingPollMs = 0L
       return
     }
 
@@ -2623,6 +2631,7 @@ class PlayerViewModel(
     val bufferedSeconds =
       (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
         .toFloat()
+    maybePollPing(path!!)
 
     val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
 
@@ -2668,9 +2677,9 @@ class PlayerViewModel(
     val videoPlaying = timePos > 0.5 && !pausedForCache
     if (videoPlaying) {
       lastVideoPlaying = true
-      if (!_streamInfoAutoConsumed.value) {
+      if (!_streamInfoAutoConsumed.value && bufferedSeconds >= 5f) {
         _streamInfoAutoConsumed.value = true
-        Log.d(TAG, "StreamInfo: video begun (pos=$timePos), auto overlay consumed")
+        Log.d(TAG, "StreamInfo: video begun with ${bufferedSeconds}s buffered, auto overlay consumed")
       }
     } else if (lastVideoPlaying && timePos <= 0.5) {
       lastVideoPlaying = false
@@ -2705,8 +2714,27 @@ class PlayerViewModel(
         seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
         peers = stats?.peers ?: 0,
         swarmSeeds = swarmSeeds,
+        pingMs = pingMs,
         speedBytesPerSec = speedBytesPerSec,
       )
+  }
+
+  private fun maybePollPing(path: String) {
+    if (pingPollInFlight) return
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastPingPollMs < pingPollIntervalMs) return
+    lastPingPollMs = now
+    pingPollInFlight = true
+    viewModelScope.launch {
+      try {
+        val result = withContext(Dispatchers.IO) { StreamStatsFetcher.fetchPingMs() }
+        if (lastStatsPath == path && runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
+          pingMs = result
+        }
+      } finally {
+        pingPollInFlight = false
+      }
+    }
   }
 
   private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {

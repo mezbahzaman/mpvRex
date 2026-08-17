@@ -1275,8 +1275,7 @@ fun RenderPlayerButton(
       val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
       val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
       val streamInfoAutoVisible =
-        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed &&
-          (pausedForCache == true || (coreIdle == true && eofReached != true))
+        streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
       val isStreamInfoVisible = streamStats.isNetwork && (isStreamInfoPanelVisible || streamInfoAutoVisible)
       val toggleStreamInfo = {
         clickEvent()
@@ -1404,4 +1403,3 @@ fun Surface(
         content = content
     )
 }
-

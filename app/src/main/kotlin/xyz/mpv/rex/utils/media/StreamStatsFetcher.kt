@@ -14,6 +14,7 @@ import java.net.URI
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 /**
@@ -32,6 +33,7 @@ data class StreamStats(
   val seeds: Int = 0,
   val peers: Int = 0,
   val swarmSeeds: Int? = null,
+  val pingMs: Int = 0,
   val speedBytesPerSec: Long = 0,
 )
 
@@ -49,6 +51,31 @@ object StreamStatsFetcher {
 
   private const val STATS_TIMEOUT_MS = 1500
   private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
+  private val PING_TIME_REGEX = Regex("time[=<]([0-9]+(?:\\.[0-9]+)?)\\s*ms", RegexOption.IGNORE_CASE)
+
+  /** Returns ICMP latency to google.com, or 0 when the probe times out/fails. */
+  fun fetchPingMs(): Int {
+    var process: Process? = null
+    return try {
+      process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "2", "google.com")
+        .redirectErrorStream(true)
+        .start()
+      if (!process.waitFor(3, TimeUnit.SECONDS)) {
+        process.destroyForcibly()
+        return 0
+      }
+      val output = process.inputStream.bufferedReader().use { it.readText() }
+      parsePingMs(output)
+    } catch (_: Exception) {
+      0
+    } finally {
+      process?.destroy()
+    }
+  }
+
+  internal fun parsePingMs(output: String): Int =
+    PING_TIME_REGEX.find(output)?.groupValues?.getOrNull(1)
+      ?.toDoubleOrNull()?.toInt()?.coerceAtLeast(1) ?: 0
 
   /**
    * Detects a Stremio torrent URL. The infoHash is the first path segment

@@ -184,9 +184,9 @@
     <string name="pref_player_close_after_eof">Close after the end of playback</string>
     <string name="buffering_percent">Buffering %1$d%%</string>
     <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
-    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$s</string>
-    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$s</string>
-    <string name="stream_stats_line_http">%1$ds buffered • %2$s</string>
+    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$d ms • %5$s</string>
+    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$d ms • %6$s</string>
+    <string name="stream_stats_line_http">%1$ds buffered • %2$d ms • %3$s</string>
     <string name="pref_player_remember_brightness">Remember display brightness</string>
 
     <string name="pref_player_gestures">Gestures</string>

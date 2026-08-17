@@ -1,4 +1,5 @@
-# mpvRex 4.6.8
+# mpvRex 4.6.9
 
-- Automatic subtitle search now starts only for streams with a reported runtime of at least 10 minutes.
-- Short, live, and unknown-duration streams are skipped without contacting the subtitle service.
+- Stream info now shows Google ping latency for HTTP and P2P playback, refreshing every five seconds.
+- Ping displays `0 ms` when the probe fails or times out.
+- Startup stream info stays visible until playback has at least five buffered seconds, then returns to manual control.
