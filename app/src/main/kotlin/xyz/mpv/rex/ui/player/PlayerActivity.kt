@@ -234,6 +234,7 @@ class PlayerActivity :
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
   private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
   private var intentPositionMs = POSITION_NOT_SET // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
+  private var loadedPlaybackState: PlaybackStateEntity? = null
   private var lastVid = -1 // Track video track for background playback optimization
   private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
   private var inheritedNativeSession = false // MPV ownership came from HeadlessPlaybackController
@@ -2050,7 +2051,8 @@ class PlayerActivity :
       }
 
       // Apply track selection logic (defaults only apply when no saved state)
-      trackSelector.onFileLoaded(hasState)
+      trackSelector.onFileLoaded(hasState, loadedPlaybackState?.sid)
+      loadedPlaybackState = null
 
       // Apply default zoom only if there's no saved state
       if (!hasState) {
@@ -2494,10 +2496,12 @@ class PlayerActivity :
    * @return true if saved state was found and applied, false otherwise
    */
   private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
+    loadedPlaybackState = null
     if (mediaIdentifier.isBlank()) return false
 
     return runCatching {
       val state = playbackStateRepository.getVideoDataByTitle(mediaIdentifier)
+      loadedPlaybackState = state
 
       applyPlaybackState(state)
       applyDefaultSettings(state)

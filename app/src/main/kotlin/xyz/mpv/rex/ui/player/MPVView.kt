@@ -127,11 +127,10 @@ class MPVView(
       MPVLib.setOptionString("gpu-context", "androidvk")
     }
 
-    // Set hwdec with fallback order: HW+ (mediacodec) -> SW (no)
-    // mediacodec-copy (HW) is omitted as it often causes Surface-related crashes on certain devices
+    // Decoder fallback order: HW+ (zero-copy) -> HW (copy-back) -> SW.
     MPVLib.setOptionString(
       "hwdec",
-      if (decoderPreferences.tryHWDecoding.get()) "mediacodec-copy,mediacodec,no" else "no",
+      if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no",
     )
     MPVLib.setOptionString("hwdec-codecs", "all")
 

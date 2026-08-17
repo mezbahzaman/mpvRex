@@ -355,6 +355,9 @@ class PlayerViewModel(
   private var lastAutoSubPath: String? = null
   private var lastAutoSubAttemptMs = 0L
   private val autoSubRetryIntervalMs = 30_000L
+  private val autoSubLiveDetectionDelayMs = 8_000L
+  private var autoSubObservedPath: String? = null
+  private var autoSubObservedAtMs = 0L
 
   // External subtitle tracking
   val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
@@ -2286,7 +2289,7 @@ class PlayerViewModel(
       MPVLib.command("vf", "remove", "@mpvex_hflip")
       MPVLib.command("vf", "remove", "@mpvex_vflip")
 
-      val preferredHwDec = if (decoderPreferences.tryHWDecoding.get()) "mediacodec" else "no"
+      val preferredHwDec = if (decoderPreferences.tryHWDecoding.get()) "mediacodec,mediacodec-copy,no" else "no"
       MPVLib.setPropertyString("hwdec", preferredHwDec)
     }
   }
@@ -2350,8 +2353,22 @@ class PlayerViewModel(
 
     val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
     if (path.isNullOrBlank()) return
+    if (path != autoSubObservedPath) {
+      autoSubObservedPath = path
+      autoSubObservedAtMs = SystemClock.elapsedRealtime()
+    }
     if (path == lastAutoSubPath && SystemClock.elapsedRealtime() - lastAutoSubAttemptMs < autoSubRetryIntervalMs) return
     if (!StreamTuning.isNetworkUri(path)) return
+
+    val duration = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
+    if ((duration == null || !duration.isFinite() || duration <= 0.0) &&
+      SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
+    if (duration == null || !duration.isFinite() || duration <= 0.0) {
+      lastAutoSubPath = path
+      lastAutoSubAttemptMs = Long.MAX_VALUE
+      Log.d(TAG, "AutoSub: live stream detected, skipping online subtitles")
+      return
+    }
 
     // Wait until the demuxer has populated the track list so that embedded-sub
     // detection is accurate (tracks arrive slightly after playback starts).
