@@ -205,7 +205,6 @@ fun PlayerControls(
   val precisePosition by viewModel.precisePosition.collectAsState()
   val preciseDuration by viewModel.preciseDuration.collectAsState()
   val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
-  val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
   val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
   val streamStats by viewModel.streamStats.collectAsState()
   val streamStatsPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()

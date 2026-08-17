@@ -22,13 +22,12 @@ import kotlin.random.Random
  *
  * For torrent streams, Stremio's streaming server (local WebTorrent HTTP engine)
  * exposes a real-time JSON endpoint: `{origin}/{infoHash}/stats.json`.
- * Polled once per second; combined with mpv's own cache properties.
+ * Combined with mpv's own cache properties by the player stats loop.
  */
 data class StreamStats(
   val isNetwork: Boolean = false,
   val isTorrent: Boolean = false,
   val fetchingMetadata: Boolean = false,
-  val hasTorrentStats: Boolean = false,
   val bufferedSeconds: Float = 0f,
   val seeds: Int = 0,
   val peers: Int = 0,
@@ -151,7 +150,7 @@ object StreamStatsFetcher {
       "info_hash=$infoHashParam&peer_id=$peerId&port=6881" +
         "&uploaded=0&downloaded=0&left=1&compact=1&numwant=0"
 
-    trackerUrls.distinct().take(12).map { tracker ->
+    trackerUrls.distinct().take(3).map { tracker ->
       async(Dispatchers.IO) {
         when {
           tracker.startsWith("udp://", ignoreCase = true) -> fetchUdpTrackerSeeds(rawHash, tracker)

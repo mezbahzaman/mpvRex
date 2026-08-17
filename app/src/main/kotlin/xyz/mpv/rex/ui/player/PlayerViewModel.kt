@@ -266,6 +266,7 @@ class PlayerViewModel(
   // Live stats for network streams (Stremio HTTP / P2P torrents)
   private val _streamStats = MutableStateFlow(StreamStats())
   val streamStats: StateFlow<StreamStats> = _streamStats.asStateFlow()
+  private val streamStatsMutex = Mutex()
 
   /**
    * Manual toggle for the stream-info overlay ("i" button). The overlay is also
@@ -492,7 +493,17 @@ class PlayerViewModel(
     viewModelScope.launch {
       while (isActive) {
         updateStreamStats()
-        delay(extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L)
+        val pathAvailable = runCatching { MPVLib.getPropertyString("path") }.getOrNull() != null
+        val streamInfoVisible = streamStatsPanelVisible.value ||
+          (_streamStats.value.isNetwork && !_streamInfoDismissed.value && !_streamInfoAutoConsumed.value)
+        val refreshSeconds = if (streamInfoVisible) {
+          extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60)
+        } else if (!pathAvailable) {
+          1
+        } else {
+          HIDDEN_STREAM_STATS_REFRESH_SECONDS
+        }
+        delay(refreshSeconds * 1000L)
       }
     }
 
@@ -500,7 +511,9 @@ class PlayerViewModel(
     viewModelScope.launch {
       while (isActive) {
         maybeAutoLoadSubtitles()
-        delay(1000)
+        val enabled = subtitlesPreferences.wyzieApiKey.get().isNotBlank() &&
+          (extraPreferences.autoStremioSubtitles.get() || extraPreferences.autoLocalSubtitles.get())
+        delay(if (enabled) 1000L else 10_000L)
       }
     }
 
@@ -638,6 +651,7 @@ class PlayerViewModel(
 
   private companion object {
     const val TAG = "PlayerViewModel"
+    const val HIDDEN_STREAM_STATS_REFRESH_SECONDS = 5
     val VALID_SUBTITLE_EXTENSIONS =
       setOf(
         // Common & modern
@@ -739,6 +753,9 @@ class PlayerViewModel(
 
   fun prepareForFileLoad(initialDurationSec: Float? = null) {
     resetExternalAudioTracks()
+    _streamInfoAutoConsumed.value = false
+    _streamInfoDismissed.value = false
+    lastVideoPlaying = false
     _precisePosition.value = 0f
     if (initialDurationSec != null && initialDurationSec > 0f) {
       _primaryVideoDuration.value = initialDurationSec.toDouble()
@@ -2317,6 +2334,8 @@ class PlayerViewModel(
   private var activeInfoHash: String? = null
   private var firstTorrentAttempt: Long = 0L
   private val statsGracePeriodMs = 15_000L
+  private val pingRefreshIntervalMs = 30_000L
+  private val swarmRefreshIntervalMs = 60_000L
 
   // Connected-seeder count is only reported while pieces are actively being
   // requested (`wires` empties when the stream is buffered/idle). Retain the
@@ -2328,13 +2347,9 @@ class PlayerViewModel(
   private var swarmSeeds: Int? = null
   private var lastSwarmPollMs = 0L
   private var swarmPollInFlight = false
-  // Temporary diagnostics for buffering/stutter investigation.
   private var lastStatsPath: String? = null
   private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
   private var lastHttpSampleMs = 0L
-  private var lastPausedForCache = false
-  private var lastCachePausePos = 0.0
-  private var lastDiagLogMs = 0L
   private var lastVideoPlaying = false
   private var pingMs = 0
   private var lastPingPollMs = 0L
@@ -2343,6 +2358,7 @@ class PlayerViewModel(
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
     _streamInfoDismissed.value = false
+    viewModelScope.launch { updateStreamStats() }
   }
 
   fun dismissStreamInfo() {
@@ -2591,7 +2607,7 @@ class PlayerViewModel(
     Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")
   }
 
-  private suspend fun updateStreamStats() {
+  private suspend fun updateStreamStats() = streamStatsMutex.withLock {
     val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
     if (path != lastStatsPath) {
       lastStatsPath = path
@@ -2626,9 +2642,8 @@ class PlayerViewModel(
       lastVideoPlaying = false
       pingMs = 0
       lastPingPollMs = 0L
-      return
+      return@withLock
     }
-
     val infoHash = path?.let { StreamStatsFetcher.parseInfoHash(it) }
     var torrentStats: TorrentStats? = null
     if (infoHash != null) {
@@ -2684,22 +2699,6 @@ class PlayerViewModel(
     lastHttpSampleMs = now
     val speedBytesPerSec = if (stats != null) stats.downloadSpeed.coerceAtLeast(0) else httpSpeed
 
-    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
-    if (pausedForCache && !lastPausedForCache) {
-      lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
-      Log.d(
-        TAG,
-        "BUFFER pause start: pos=${lastCachePausePos} " +
-          "cache=${"%.1f".format(runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)}s",
-      )
-    }
-    if (!pausedForCache && lastPausedForCache) {
-      val resumePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
-      Log.d(TAG, "BUFFER resume: pausePos=$lastCachePausePos resumePos=$resumePos " +
-        "delta=${"%.2f".format(resumePos - lastCachePausePos)}")
-    }
-    lastPausedForCache = pausedForCache
-
     // One-shot auto-show: once the video actually begins playing, never
     // auto-show the stream-info overlay again for this playback (manual "i"
     // button is the only way). A position reset to ~0 means a new session.
@@ -2718,28 +2717,11 @@ class PlayerViewModel(
       Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
     }
 
-    if (now - lastDiagLogMs > 10_000L) {
-      lastDiagLogMs = now
-      val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()
-      val codec = runCatching { MPVLib.getPropertyString("video-format") }.getOrNull()
-      val fps = runCatching { MPVLib.getPropertyDouble("container-fps") }.getOrNull()
-      val buffering = runCatching { MPVLib.getPropertyInt("cache-buffering-state") }.getOrNull()
-      val cacheSpeed = runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull()
-      Log.d(
-        TAG,
-        "DIAG isTorrent=$isTorrent pausedForCache=$pausedForCache " +
-          "buffering=$buffering cache=${"%.1f".format(bufferedSeconds)}s " +
-          "cacheSpeed=$cacheSpeed hwdec=$hwdec codec=$codec fps=$fps " +
-          "coreIdle=${runCatching { MPVLib.getPropertyBoolean("core-idle") }.getOrNull()}",
-      )
-    }
-
     _streamStats.value =
       StreamStats(
         isNetwork = true,
         isTorrent = isTorrent,
         fetchingMetadata = isTorrent && stats == null,
-        hasTorrentStats = stats != null,
         bufferedSeconds = bufferedSeconds,
         seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
         peers = stats?.peers ?: 0,
@@ -2752,8 +2734,7 @@ class PlayerViewModel(
   private fun maybePollPing(path: String) {
     if (pingPollInFlight) return
     val now = SystemClock.elapsedRealtime()
-    val refreshIntervalMs = extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L
-    if (now - lastPingPollMs < refreshIntervalMs) return
+    if (now - lastPingPollMs < pingRefreshIntervalMs) return
     lastPingPollMs = now
     pingPollInFlight = true
     viewModelScope.launch {
@@ -2773,8 +2754,7 @@ class PlayerViewModel(
   private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
     if (stats.trackerUrls.isEmpty() || swarmPollInFlight) return
     val now = SystemClock.elapsedRealtime()
-    val refreshIntervalMs = extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L
-    if (now - lastSwarmPollMs < refreshIntervalMs) return
+    if (now - lastSwarmPollMs < swarmRefreshIntervalMs) return
     lastSwarmPollMs = now
     swarmPollInFlight = true
     val expectedPath = lastStatsPath

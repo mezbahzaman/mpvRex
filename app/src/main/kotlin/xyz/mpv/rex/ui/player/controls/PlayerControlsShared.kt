@@ -1271,8 +1271,6 @@ fun RenderPlayerButton(
       val isStreamInfoPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
       val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
       val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
-      val pausedForCache by MPVLib.propBoolean["paused-for-cache"].collectAsState()
-      val coreIdle by MPVLib.propBoolean["core-idle"].collectAsState()
       val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
       val streamInfoAutoVisible =
         streamStats.isNetwork && !streamInfoDismissed && !streamInfoAutoConsumed && eofReached != true
