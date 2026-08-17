@@ -22,7 +22,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..d74d8f9 100644
+index b937ac6..ed49df0 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -31,8 +31,8 @@ index b937ac6..d74d8f9 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 219
-+    versionName = "4.6.7"
++    versionCode = 220
++    versionName = "4.6.8"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -599,7 +599,7 @@ index 09ac607..199b157 100644
      /**
       * Maximum volume for MPV in percent.
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index feecc99..1905a83 100644
+index feecc99..bea5fe5 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 @@ -4,7 +4,9 @@ import android.content.Context
@@ -658,7 +658,7 @@ index feecc99..1905a83 100644
    val currentBrightness =
      MutableStateFlow(
        runCatching {
-@@ -316,6 +350,15 @@ class PlayerViewModel(
+@@ -316,6 +350,16 @@ class PlayerViewModel(
    var currentMediaTitle: String = ""
    private var lastAutoSelectedMediaTitle: String? = null
  
@@ -668,13 +668,14 @@ index feecc99..1905a83 100644
 +  private var lastAutoSubAttemptMs = 0L
 +  private val autoSubRetryIntervalMs = 30_000L
 +  private val autoSubLiveDetectionDelayMs = 8_000L
++  private val autoSubMinimumDurationSeconds = 10 * 60.0
 +  private var autoSubObservedPath: String? = null
 +  private var autoSubObservedAtMs = 0L
 +
    // External subtitle tracking
    val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
  
-@@ -441,6 +484,22 @@ class PlayerViewModel(
+@@ -441,6 +485,22 @@ class PlayerViewModel(
        }
      }
  
@@ -697,7 +698,7 @@ index feecc99..1905a83 100644
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2230,15 +2289,451 @@ class PlayerViewModel(
+@@ -2230,15 +2290,450 @@ class PlayerViewModel(
        MPVLib.command("vf", "remove", "@mpvex_hflip")
        MPVLib.command("vf", "remove", "@mpvex_vflip")
  
@@ -774,12 +775,11 @@ index feecc99..1905a83 100644
 +    if (!StreamTuning.isNetworkUri(path)) return
 +
 +    val duration = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
-+    if ((duration == null || !duration.isFinite() || duration <= 0.0) &&
-+      SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
-+    if (duration == null || !duration.isFinite() || duration <= 0.0) {
++    if (SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
++    if (duration == null || !duration.isFinite() || duration < autoSubMinimumDurationSeconds) {
 +      lastAutoSubPath = path
 +      lastAutoSubAttemptMs = Long.MAX_VALUE
-+      Log.d(TAG, "AutoSub: live stream detected, skipping online subtitles")
++      Log.d(TAG, "AutoSub: runtime below 10 minutes or unavailable, skipping online subtitles")
 +      return
 +    }
 +
