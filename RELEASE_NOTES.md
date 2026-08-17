@@ -1,9 +1,17 @@
-# mpvRex Stremio Edition 4.5.2
+# mpvRex Stremio Edition 4.5.4
 
 mpvRex Stremio Edition is a specialized build of
 [mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
 external player with Stremio. It retains the complete mpvRex playback experience
 and can also be used as a regular Android video player.
+
+## Fixes in 4.5.4
+
+- Removed the experimental seekbar thumbnail preview introduced in 4.5.3 because
+  its background decoder could crash the player on affected devices.
+- Video cards inside folders now resolve playback state by full file location,
+  matching the player and Home screen. Watching a newly added video therefore
+  clears its `New` label inside the folder as well.
 
 ## Fixes in 4.5.2
 
