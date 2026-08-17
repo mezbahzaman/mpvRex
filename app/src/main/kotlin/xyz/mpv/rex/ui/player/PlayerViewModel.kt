@@ -356,6 +356,7 @@ class PlayerViewModel(
   private var lastAutoSubAttemptMs = 0L
   private val autoSubRetryIntervalMs = 30_000L
   private val autoSubLiveDetectionDelayMs = 8_000L
+  private val autoSubMinimumDurationSeconds = 10 * 60.0
   private var autoSubObservedPath: String? = null
   private var autoSubObservedAtMs = 0L
 
@@ -2361,12 +2362,11 @@ class PlayerViewModel(
     if (!StreamTuning.isNetworkUri(path)) return
 
     val duration = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
-    if ((duration == null || !duration.isFinite() || duration <= 0.0) &&
-      SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
-    if (duration == null || !duration.isFinite() || duration <= 0.0) {
+    if (SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
+    if (duration == null || !duration.isFinite() || duration < autoSubMinimumDurationSeconds) {
       lastAutoSubPath = path
       lastAutoSubAttemptMs = Long.MAX_VALUE
-      Log.d(TAG, "AutoSub: live stream detected, skipping online subtitles")
+      Log.d(TAG, "AutoSub: runtime below 10 minutes or unavailable, skipping online subtitles")
       return
     }
 

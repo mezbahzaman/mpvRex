@@ -1,5 +1,4 @@
-# mpvRex 4.6.7
+# mpvRex 4.6.8
 
-- Live streams no longer trigger automatic subtitle downloads.
-- Preferred embedded subtitles are selected when multiple tracks are available.
-- Decoder fallback order is HW+, then HW, then software.
+- Automatic subtitle search now starts only for streams with a reported runtime of at least 10 minutes.
+- Short, live, and unknown-duration streams are skipped without contacting the subtitle service.
