@@ -6,6 +6,8 @@ class ExtraPreferences(
   preferenceStore: PreferenceStore,
 ) {
   val autoStremioSubtitles = preferenceStore.getBoolean("sub_auto_stremio", true)
+  val maximumBufferedSeconds = preferenceStore.getInt("maximum_buffered_seconds", 180)
+  val maximumNetworkDownloadMiB = preferenceStore.getInt("maximum_network_download_mib", 200)
   val streamInfoRefreshSeconds = preferenceStore.getInt("stream_info_refresh_seconds", 1)
   val pingHost = preferenceStore.getString("ping_host", "google.com")
   val autoLocalSubtitles = preferenceStore.getBoolean("auto_local_subtitles", false)

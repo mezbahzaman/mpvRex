@@ -573,7 +573,6 @@ val DatabaseModule =
     }
 
     single { ThumbnailRepository(androidContext()) }
-    single { xyz.mpv.rex.domain.thumbnail.SeekPreviewRepository(androidContext()) }
 
     single {
       xyz.mpv.rex.database.repository.VideoMetadataCacheRepository(

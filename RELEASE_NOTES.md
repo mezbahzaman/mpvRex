@@ -1,27 +1,24 @@
-# mpvRex Stremio Edition 4.5.5
+# mpvRex Stremio Edition 4.5.4
 
 mpvRex Stremio Edition is a specialized build of
 [mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
 external player with Stremio. It retains the complete mpvRex playback experience
 and can also be used as a regular Android video player.
 
-## Changes in 4.5.5
+## Fixes in 4.5.4
 
-- Dragging the seekbar shows a low-resolution thumbnail and timestamp near the
-  selected position, then fades the preview after the drag ends.
-- Preview extraction starts independently as media is opened, reuses one Android
-  metadata decoder per video, and supports local files, HTTP streams, and Stremio
-  P2P proxy URLs. Network headers from the launch intent are forwarded when needed.
-- Preview generation uses 160 x 90 JPEGs, sparse progressive sampling, and bounded
-  memory and disk caches to minimize startup and network overhead.
-- Removed the maximum network download and buffered-duration settings and their MPV
-  cache-option overrides. Network tuning now changes timeouts only.
+- Removed the experimental seekbar thumbnail preview introduced in 4.5.3 because
+  its background decoder could crash the player on affected devices.
 - Video cards inside folders now resolve playback state by full file location,
   matching the player and Home screen. Watching a newly added video therefore
   clears its `New` label inside the folder as well.
 
 ## Fixes in 4.5.2
 
+- A zero network cache size or buffered-duration setting now disables only that
+  threshold. Positive size and time thresholds still stop read-ahead when either
+  limit is reached, and setting both to zero leaves read-ahead unrestricted by
+  these two settings.
 - Local playback state is keyed by the full file location, so files with the same
   name in different folders no longer share watched status or resume data.
   Existing filename-based playback records remain available as a fallback.
@@ -87,12 +84,15 @@ second. The ping destination can also be changed from its default, `google.com`.
 
 ### Network-specific playback tuning
 
-- P2P and HTTP streams receive separate timeout settings designed for their
-  different delivery methods.
+- P2P and HTTP streams receive separate cache, read-ahead, buffer-size, and timeout
+  settings designed for their different delivery methods.
 - Decoder selection follows a resilient fallback order: hardware-copy mode first,
   standard hardware decoding second, and software decoding last.
 - Stream state is isolated by media path to reduce stale data, incorrect speed
   readings, and playback instability when changing videos.
+- **Extra Settings** allows the maximum network download cache and maximum buffered
+  duration to be changed without editing `mpv.conf`. Defaults are `200 MiB` and
+  `180 seconds`, and apply consistently to HTTP and P2P playback.
 
 ### Honest seekbar buffering
 
@@ -160,7 +160,8 @@ second. The ping destination can also be changed from its default, `google.com`.
 
 A new **Extra Settings** screen is available under **Advanced & About**. It contains
 the Stremio automatic subtitle switch, local-file automatic subtitle controls,
-folder exclusions, stream information refresh interval, and ping host.
+folder exclusions, maximum buffered seconds, maximum network download size, stream
+information refresh interval, and ping host.
 
 ## Subtitle fonts
 
