@@ -14,11 +14,12 @@ import xyz.mpv.rex.ui.player.controls.components.panels.SubtitlesBorderStyle
 
 class SubtitlesPreferences(
   preferenceStore: PreferenceStore,
+  extraPreferences: ExtraPreferences,
 ) {
   val preferredLanguages = preferenceStore.getString("sub_preferred_languages")
   val disableSubtitlesByDefault = preferenceStore.getBoolean("sub_disable_by_default", false)
   val autoloadMatchingSubtitles = preferenceStore.getBoolean("sub_autoload_enabled", true)
-  val autoStremioSubtitles = preferenceStore.getBoolean("sub_auto_stremio", true)
+  val autoStremioSubtitles = extraPreferences.autoStremioSubtitles
 
   val fontsFolder = preferenceStore.getString("sub_fonts_folder")
   val font = preferenceStore.getString("sub_font", "")

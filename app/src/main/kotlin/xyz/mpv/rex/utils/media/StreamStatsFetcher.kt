@@ -53,11 +53,12 @@ object StreamStatsFetcher {
   private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
   private val PING_TIME_REGEX = Regex("time[=<]([0-9]+(?:\\.[0-9]+)?)\\s*ms", RegexOption.IGNORE_CASE)
 
-  /** Returns ICMP latency to google.com, or 0 when the probe times out/fails. */
-  fun fetchPingMs(): Int {
+  /** Returns ICMP latency to the configured host, or 0 when the probe times out/fails. */
+  fun fetchPingMs(host: String = "google.com"): Int {
+    val target = host.trim().takeIf { it.isNotEmpty() && it.none(Char::isWhitespace) } ?: "google.com"
     var process: Process? = null
     return try {
-      process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "2", "google.com")
+      process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "2", target)
         .redirectErrorStream(true)
         .start()
       if (!process.waitFor(3, TimeUnit.SECONDS)) {

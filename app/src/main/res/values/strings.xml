@@ -325,6 +325,24 @@
 
     <string name="pref_advanced">Advanced</string>
     <string name="pref_advanced_summary">Configuration location, mpv.conf</string>
+    <string name="pref_extra_settings_title">Extra Settings</string>
+    <string name="pref_extra_settings_summary">Streaming limits, connectivity, and local subtitles</string>
+    <string name="pref_extra_streaming_section">Streaming &amp; Network</string>
+    <string name="pref_extra_maximum_buffered_seconds_title">Maximum Allowed Buffered Seconds</string>
+    <string name="pref_extra_maximum_network_download_title">Maximum Allowed Network Stream Download</string>
+    <string name="pref_extra_stream_info_refresh_title">Stream info refresh interval</string>
+    <string name="pref_extra_ping_host_title">Ping host</string>
+    <string name="pref_extra_seconds_value">%1$d seconds</string>
+    <string name="pref_extra_mib_value">%1$d MiB</string>
+    <string name="pref_extra_positive_number_error">Enter a whole number greater than zero</string>
+    <string name="pref_extra_host_error">Enter a host without spaces</string>
+    <string name="pref_extra_local_subtitles_section">Local Subtitles</string>
+    <string name="pref_extra_auto_local_subtitles_title">Auto-download subtitles for local files</string>
+    <string name="pref_extra_auto_local_subtitles_summary">Search Wyzie when a local video has no embedded or loaded subtitles. Camera videos are always skipped.</string>
+    <string name="pref_extra_excluded_folders_title">Excluded Folders</string>
+    <string name="pref_extra_add_excluded_folder_title">Add excluded folder</string>
+    <string name="pref_extra_add_excluded_folder_summary">Automatic online subtitle search will be skipped in selected folders</string>
+    <string name="pref_extra_remove_excluded_folder">Remove excluded folder</string>
     <string name="pref_advanced_mpv_conf_storage_location">Pick configuration storage location</string>
     <string name="config_editor_unsaved_changes">Unsaved changes</string>
     <string name="config_editor_no_storage_location">No storage location set</string>

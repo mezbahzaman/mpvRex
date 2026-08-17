@@ -31,27 +31,39 @@ object StreamTuning {
     return parsed.port == 11470 || parsed.pathSegments.firstOrNull()?.matches(Regex("[0-9a-fA-F]{40}")) == true
   }
 
-  fun applyTuningForUri(uri: String?) {
+  fun applyTuningForUri(
+    uri: String?,
+    maximumDownloadMiB: Int = 200,
+    maximumBufferedSeconds: Int = 180,
+  ) {
     if (uri.isNullOrBlank()) return
+    val downloadMiB = maximumDownloadMiB.coerceIn(1, 4096)
+    val bufferedSeconds = maximumBufferedSeconds.coerceIn(1, 3600)
     when {
       isStremioTorrentUri(uri) -> {
         // Torrent (Stremio WebTorrent) server: peers are slow, so read far ahead
         // and tolerate long stalls so playback doesn't freeze.
+        MPVLib.setOptionString("cache", "yes")
         MPVLib.setOptionString("network-timeout", "45")
-        MPVLib.setOptionString("demuxer-max-bytes", "512MiB")
-        MPVLib.setOptionString("demuxer-readahead-secs", "45")
+        MPVLib.setOptionString("demuxer-max-bytes", "${downloadMiB}MiB")
+        MPVLib.setOptionString("demuxer-readahead-secs", bufferedSeconds.toString())
+        MPVLib.setOptionString("cache-secs", bufferedSeconds.toString())
       }
       isNetworkUri(uri) -> {
         // Regular HTTP(S)/HLS/RTSP streams: modestly larger read-ahead cushion.
+        MPVLib.setOptionString("cache", "yes")
         MPVLib.setOptionString("network-timeout", "30")
-        MPVLib.setOptionString("demuxer-max-bytes", "256MiB")
-        MPVLib.setOptionString("demuxer-readahead-secs", "20")
+        MPVLib.setOptionString("demuxer-max-bytes", "${downloadMiB}MiB")
+        MPVLib.setOptionString("demuxer-readahead-secs", bufferedSeconds.toString())
+        MPVLib.setOptionString("cache-secs", bufferedSeconds.toString())
       }
       else -> {
         // Local files: reset to mpv defaults so cached tuning doesn't linger.
+        MPVLib.setOptionString("cache", "no")
         MPVLib.setOptionString("network-timeout", "30")
         MPVLib.setOptionString("demuxer-max-bytes", "150MiB")
         MPVLib.setOptionString("demuxer-readahead-secs", "10")
+        MPVLib.setOptionString("cache-secs", "10")
       }
     }
   }

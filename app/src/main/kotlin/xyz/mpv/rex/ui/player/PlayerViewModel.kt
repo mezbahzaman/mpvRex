@@ -21,6 +21,7 @@ import xyz.mpv.rex.R
 import xyz.mpv.rex.preferences.AudioPreferences
 import xyz.mpv.rex.preferences.DecoderPreferences
 import xyz.mpv.rex.preferences.GesturePreferences
+import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.preferences.PlayerPreferences
 import xyz.mpv.rex.preferences.SubtitlesPreferences
 import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
@@ -99,6 +100,7 @@ class PlayerViewModel(
   private val gesturePreferences: GesturePreferences by inject()
   private val audioPreferences: AudioPreferences by inject()
   private val subtitlesPreferences: SubtitlesPreferences by inject()
+  private val extraPreferences: ExtraPreferences by inject()
   private val advancedPreferences: AdvancedPreferences by inject()
   private val json: Json by inject()
   private val playbackStateRepository: xyz.mpv.rex.domain.playbackstate.repository.PlaybackStateRepository by inject()
@@ -352,6 +354,7 @@ class PlayerViewModel(
 
   // Auto-subtitles for Stremio handoffs
   private var stremioHandoff = false
+  private var autoSubtitleSource: String? = null
   private var lastAutoSubPath: String? = null
   private var lastAutoSubAttemptMs = 0L
   private val autoSubRetryIntervalMs = 30_000L
@@ -485,18 +488,18 @@ class PlayerViewModel(
       }
     }
 
-    // Poll live stream stats (Stremio P2P / HTTP) every second
+    // Poll all live stream information at the user-selected cadence.
     viewModelScope.launch {
       while (isActive) {
         updateStreamStats()
-        delay(1000)
+        delay(extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L)
       }
     }
 
-    // Auto-download subtitles for Stremio handoffs that have no embedded subs
+    // Auto-download subtitles for eligible streams and local files without subtitles.
     viewModelScope.launch {
       while (isActive) {
-        maybeAutoLoadStremioSubtitles()
+        maybeAutoLoadSubtitles()
         delay(1000)
       }
     }
@@ -2325,8 +2328,6 @@ class PlayerViewModel(
   private var swarmSeeds: Int? = null
   private var lastSwarmPollMs = 0L
   private var swarmPollInFlight = false
-  private val swarmPollIntervalMs = 60_000L
-
   // Temporary diagnostics for buffering/stutter investigation.
   private var lastStatsPath: String? = null
   private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
@@ -2338,7 +2339,6 @@ class PlayerViewModel(
   private var pingMs = 0
   private var lastPingPollMs = 0L
   private var pingPollInFlight = false
-  private val pingPollIntervalMs = 5_000L
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2358,25 +2358,38 @@ class PlayerViewModel(
     }
   }
 
+  fun setAutoSubtitleSource(source: String?) {
+    autoSubtitleSource = source
+    autoSubObservedPath = null
+    lastAutoSubPath = null
+    lastAutoSubAttemptMs = 0L
+  }
+
   /**
    * Checks once per second whether the currently playing Stremio stream needs
    * an online subtitle. Runs only for network streams handed off by Stremio,
    * skips files that already have embedded subtitle tracks, and never retries
    * the same path after a decision has been made.
    */
-  private suspend fun maybeAutoLoadStremioSubtitles() {
-    if (!stremioHandoff) return
-    if (!subtitlesPreferences.autoStremioSubtitles.get()) return
+  private suspend fun maybeAutoLoadSubtitles() {
     if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
 
     val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
     if (path.isNullOrBlank()) return
+    val isNetwork = StreamTuning.isNetworkUri(path)
+    val source = autoSubtitleSource?.takeIf { !isNetwork } ?: path
+    val enabledForSource = if (isNetwork) {
+      stremioHandoff && extraPreferences.autoStremioSubtitles.get()
+    } else {
+      extraPreferences.autoLocalSubtitles.get() &&
+        isEligibleLocalAutoSubtitle(source, extraPreferences.localSubtitleExcludedFolders.get())
+    }
+    if (!enabledForSource) return
     if (path != autoSubObservedPath) {
       autoSubObservedPath = path
       autoSubObservedAtMs = SystemClock.elapsedRealtime()
     }
     if (path == lastAutoSubPath && SystemClock.elapsedRealtime() - lastAutoSubAttemptMs < autoSubRetryIntervalMs) return
-    if (!StreamTuning.isNetworkUri(path)) return
 
     val duration = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
     if (SystemClock.elapsedRealtime() - autoSubObservedAtMs < autoSubLiveDetectionDelayMs) return
@@ -2406,7 +2419,7 @@ class PlayerViewModel(
     lastAutoSubPath = path
     lastAutoSubAttemptMs = SystemClock.elapsedRealtime()
     Log.d(TAG, "AutoSub: no embedded subtitles, searching online for '$path'")
-    autoSearchAndAttach(path)
+    autoSearchAndAttach(path, source)
   }
 
   private fun hasSubtitleTracks(): Boolean {
@@ -2538,9 +2551,9 @@ class PlayerViewModel(
     }.distinctBy { listOf(it.query.lowercase(), it.season, it.episode, it.year) }
   }
 
-  private suspend fun autoSearchAndAttach(path: String) {
+  private suspend fun autoSearchAndAttach(path: String, searchSource: String = path) {
     val mediaTitle = currentMediaTitle
-    val candidates = autoSubSearchCandidates(path)
+    val candidates = autoSubSearchCandidates(searchSource)
     if (candidates.isEmpty()) {
       Log.d(TAG, "AutoSub: no usable title metadata found")
       return
@@ -2739,12 +2752,15 @@ class PlayerViewModel(
   private fun maybePollPing(path: String) {
     if (pingPollInFlight) return
     val now = SystemClock.elapsedRealtime()
-    if (now - lastPingPollMs < pingPollIntervalMs) return
+    val refreshIntervalMs = extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L
+    if (now - lastPingPollMs < refreshIntervalMs) return
     lastPingPollMs = now
     pingPollInFlight = true
     viewModelScope.launch {
       try {
-        val result = withContext(Dispatchers.IO) { StreamStatsFetcher.fetchPingMs() }
+        val result = withContext(Dispatchers.IO) {
+          StreamStatsFetcher.fetchPingMs(extraPreferences.pingHost.get())
+        }
         if (lastStatsPath == path && runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
           pingMs = result
         }
@@ -2757,7 +2773,8 @@ class PlayerViewModel(
   private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
     if (stats.trackerUrls.isEmpty() || swarmPollInFlight) return
     val now = SystemClock.elapsedRealtime()
-    if (now - lastSwarmPollMs < swarmPollIntervalMs) return
+    val refreshIntervalMs = extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60) * 1000L
+    if (now - lastSwarmPollMs < refreshIntervalMs) return
     lastSwarmPollMs = now
     swarmPollInFlight = true
     val expectedPath = lastStatsPath

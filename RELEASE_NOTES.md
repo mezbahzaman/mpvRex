@@ -1,4 +1,4 @@
-# mpvRex Stremio Edition 4.5.0
+# mpvRex Stremio Edition 4.5.1
 
 mpvRex Stremio Edition is a specialized build of
 [mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
@@ -40,19 +40,23 @@ for local files.
 - Connected seed count
 - Connected peer count
 - Total torrent swarm size, queried through both HTTP and UDP trackers
-- Live network ping, refreshed every five seconds
+- Live network ping
 - Live download speed in B/s, KB/s, or MB/s
 
 ### HTTP stream details
 
 - Buffered video in seconds
-- Live network ping, refreshed every five seconds
+- Live network ping
 - Actual per-second received network data in B/s, KB/s, or MB/s
 - An immediate `0 KB/s` reading when traffic stops, playback is paused, or the
   stream is already fully buffered, instead of retaining an outdated speed
 
 If a ping probe fails or times out, the overlay reports `0 ms` rather than leaving
 an old latency value visible.
+
+All stream information now follows one configurable refresh interval, including
+buffered seconds, speed, peers, seeds, swarm data, and ping. The default is one
+second. The ping destination can also be changed from its default, `google.com`.
 
 ## Streaming and buffering
 
@@ -64,6 +68,9 @@ an old latency value visible.
   standard hardware decoding second, and software decoding last.
 - Stream state is isolated by media path to reduce stale data, incorrect speed
   readings, and playback instability when changing videos.
+- **Extra Settings** allows the maximum network download cache and maximum buffered
+  duration to be changed without editing `mpv.conf`. Defaults are `200 MiB` and
+  `180 seconds`, and apply consistently to HTTP and P2P playback.
 
 ### Honest seekbar buffering
 
@@ -71,6 +78,8 @@ an old latency value visible.
   showing a misleading fully buffered seekbar.
 - Rebuffering displays a clear `Buffering X%` status based on MPV's real buffering
   state.
+- The percentage label uses a stable width and fixed-width digits so rapid
+  single-digit updates do not overlap or visually merge.
 - Local files do not show a network-style buffer indicator because the entire local
   file is already seekable.
 
@@ -84,7 +93,7 @@ an old latency value visible.
   [store.wyzie.io/redeem](https://store.wyzie.io/redeem) and entered under
   **Settings > Subtitle settings > Wyzie API key**.
 - Automatic loading can be enabled or disabled under
-  **Settings > Subtitle settings > Auto-download subtitles for Stremio streams**.
+  **Settings > Extra Settings > Auto-download subtitles for Stremio streams**.
 - Manual online subtitle search remains available whenever a different language or
   result is preferred.
 
@@ -95,6 +104,15 @@ an old latency value visible.
 - If Stremio includes subtitle URLs in its handoff, those tracks are loaded first.
 - When several embedded tracks exist, mpvRex restores and selects the preferred
   subtitle track according to the player's normal language and track preferences.
+
+### Optional subtitles for local files
+
+- Automatic Wyzie search can also be enabled for local videos that have no embedded
+  or already loaded subtitle track. This option is disabled by default.
+- Common camera folders and camera-style filenames are always skipped.
+- Additional folders can be excluded with a multi-folder blacklist in
+  **Extra Settings**. The blacklist is available only while local automatic
+  subtitles are enabled.
 
 ### Accurate title matching
 
@@ -115,6 +133,19 @@ an old latency value visible.
   live streams.
 - Unknown duration remains pending until MPV reports a valid value; it is not
   mistaken for a short or live stream.
+
+## Extra Settings
+
+A new **Extra Settings** screen is available under **Advanced & About**. It contains
+the Stremio automatic subtitle switch, local-file automatic subtitle controls,
+folder exclusions, maximum buffered seconds, maximum network download size, stream
+information refresh interval, and ping host.
+
+## Subtitle fonts
+
+- Roboto, Lato, and Noto Sans are bundled as ready-to-use subtitle font families.
+- Existing custom font-folder support remains available, and user-provided font
+  files are never overwritten by bundled fonts.
 
 ## Updates and compatibility
 

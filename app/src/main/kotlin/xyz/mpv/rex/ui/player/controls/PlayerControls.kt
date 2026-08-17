@@ -1000,11 +1000,20 @@ fun PlayerControls(
                 )
                 val bufferingPercent = cacheBufferingState
                 if (bufferingPercent != null && bufferingPercent in 0..100) {
-                  Text(
-                    text = stringResource(id = R.string.buffering_percent, bufferingPercent),
-                    color = Color.White.copy(alpha = 0.9f),
-                    style = MaterialTheme.typography.titleMedium,
-                  )
+                  Box(
+                    modifier = Modifier.width(112.dp),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Text(
+                      text = stringResource(id = R.string.buffering_percent, bufferingPercent),
+                      modifier = Modifier.fillMaxWidth(),
+                      color = Color.White.copy(alpha = 0.9f),
+                      textAlign = TextAlign.Center,
+                      style = MaterialTheme.typography.titleMedium.copy(
+                        fontFeatureSettings = "tnum",
+                      ),
+                    )
+                  }
                 }
               }
             }

@@ -15,6 +15,7 @@ import xyz.mpv.rex.preferences.SubtitlesPreferences
 import xyz.mpv.rex.domain.anime4k.Anime4KManager
 import xyz.mpv.rex.ui.player.PlayerActivity.Companion.TAG
 import xyz.mpv.rex.ui.player.controls.components.panels.toColorHexString
+import xyz.mpv.rex.utils.media.copyBundledSubtitleFonts
 import `is`.xyz.mpv.BaseMPVView
 import `is`.xyz.mpv.KeyMapping
 import `is`.xyz.mpv.MPVLib
@@ -341,6 +342,8 @@ class MPVView(
 
   // Setup
   private fun setupSubtitlesOptions() {
+    copyBundledSubtitleFonts(context)
+
     // Disable MPV's automatic subtitle selection
     // App will handle track selection manually via TrackSelector to respect user choices
     MPVLib.setOptionString("slang", "")

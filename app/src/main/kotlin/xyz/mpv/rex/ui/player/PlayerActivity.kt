@@ -43,6 +43,7 @@ import xyz.mpv.rex.domain.playbackstate.repository.PlaybackStateRepository
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
 import xyz.mpv.rex.preferences.AdvancedPreferences
 import xyz.mpv.rex.preferences.DecoderPreferences
+import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.domain.hdr.HdrToysManager
 import xyz.mpv.rex.preferences.AppearancePreferences
 import xyz.mpv.rex.preferences.AudioPreferences
@@ -152,6 +153,8 @@ class PlayerActivity :
    * Preferences for subtitle settings.
    */
   private val subtitlesPreferences: SubtitlesPreferences by inject()
+
+  private val extraPreferences: ExtraPreferences by inject()
 
   /**
    * Preferences for advanced settings.
@@ -481,6 +484,7 @@ class PlayerActivity :
     val isAlreadyPlayingCurrent = !hasPlayableMediaInIntent && !currentMpvPath.isNullOrBlank() && currentMpvPath != "null"
 
     if (hasPlayableMediaInIntent) {
+      viewModel.setAutoSubtitleSource(extractUriFromIntent(intent)?.toString())
       if (isManualBackgroundPlayback || isInBackgroundPlayback) {
         isManualBackgroundPlayback = false
         endBackgroundPlayback()
@@ -493,7 +497,7 @@ class PlayerActivity :
         if (playerPreferences.savePositionOnQuit.get()) {
           runCatching { MPVLib.setPropertyBoolean("pause", true) }
         }
-        StreamTuning.applyTuningForUri(playableUri)
+        applyStreamTuning(playableUri)
         player.playFile(playableUri)
       }
     } else if (isAlreadyPlayingCurrent) {
@@ -1330,6 +1334,14 @@ class PlayerActivity :
     if (StreamTuning.isStremioTorrentUri(uri)) return true
     return intent.getBooleanExtra("return_result", false) ||
       intent.hasExtra("subtitleUrl") || intent.hasExtra("subtitles")
+  }
+
+  private fun applyStreamTuning(uri: String?) {
+    StreamTuning.applyTuningForUri(
+      uri = uri,
+      maximumDownloadMiB = extraPreferences.maximumNetworkDownloadMiB.get(),
+      maximumBufferedSeconds = extraPreferences.maximumBufferedSeconds.get(),
+    )
   }
 
   /**
@@ -2772,6 +2784,7 @@ class PlayerActivity :
 
     // Load the new file
     getPlayableUri(intent)?.let { uriStr ->
+      viewModel.setAutoSubtitleSource(extractUriFromIntent(intent)?.toString())
       val parsedUri = runCatching { Uri.parse(uriStr) }.getOrNull()
       val fastDurationMs = if (parsedUri != null) getFastDurationMsForUri(parsedUri) else 0L
       val fastDurationSec = if (fastDurationMs > 0L) fastDurationMs / 1000f else null
@@ -2785,7 +2798,7 @@ class PlayerActivity :
         }
         // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
         lifecycleScope.launch(Dispatchers.Default) {
-          StreamTuning.applyTuningForUri(uriStr)
+          applyStreamTuning(uriStr)
           MPVLib.command("loadfile", uriStr)
         }
       }
@@ -3712,6 +3725,7 @@ class PlayerActivity :
 
     val uri = playlist[index]
     val playableUri = uri.resolveUri(this) ?: uri.toString()
+    viewModel.setAutoSubtitleSource(uri.toString())
 
     // Update index in manager
     viewModel.playlistManager.updateIndex(index)
@@ -3794,7 +3808,7 @@ class PlayerActivity :
     // Load the new video
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
-      StreamTuning.applyTuningForUri(playableUri)
+      applyStreamTuning(playableUri)
       MPVLib.command("loadfile", playableUri)
     }
 
@@ -3986,7 +4000,7 @@ class PlayerActivity :
           }
           if (mpvInitialized) {
             lifecycleScope.launch(Dispatchers.Default) {
-              StreamTuning.applyTuningForUri(uriStr)
+              applyStreamTuning(uriStr)
               MPVLib.command("loadfile", uriStr)
             }
           } else {
