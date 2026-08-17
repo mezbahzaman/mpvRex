@@ -236,22 +236,22 @@ class WyzieSearchRepository(
         year: String? = null
     ): Result<List<WyzieSubtitle>> = withContext(Dispatchers.IO) {
         try {
-            var searchId = query
-            if (!query.startsWith("tt", ignoreCase = true) && !query.all { it.isDigit() }) {
+            val searchIds = if (!query.startsWith("tt", ignoreCase = true) && !query.all { it.isDigit() }) {
                 val tmdbResults = tmdbSearch(query)
-                if (tmdbResults.isNotEmpty()) {
-                    // If year is provided, prefer match with matching release year
-                    val result = if (year != null) {
-                        tmdbResults.firstOrNull { it.releaseYear == year }
-                            ?: tmdbResults.firstOrNull { it.releaseYear?.startsWith(year.take(3)) == true }
-                            ?: tmdbResults[0]
-                    } else {
-                        tmdbResults[0]
-                    }
-                    searchId = result.id.toString()
-                } else {
+                if (tmdbResults.isEmpty()) {
                     return@withContext Result.failure(Exception("Could not find media ID for '$query'"))
                 }
+
+                tmdbResults.sortedByDescending { result ->
+                    var score = 0
+                    if (year != null && result.releaseYear == year) score += 100
+                    else if (year != null && result.releaseYear?.startsWith(year.take(3)) == true) score += 50
+                    if (season != null && result.mediaType.equals("tv", ignoreCase = true)) score += 25
+                    if (season == null && result.mediaType.equals("movie", ignoreCase = true)) score += 10
+                    score
+                }.map { it.id.toString() }.distinct().take(5)
+            } else {
+                listOf(query)
             }
 
             val selectedLangsRaw = preferences.subdlLanguages.get()
@@ -270,16 +270,20 @@ class WyzieSearchRepository(
             
             val hearingImpaired = preferences.wyzieHearingImpaired.get()
 
-            val results = fetchSubtitles(
-                id = searchId,
-                season = season,
-                episode = episode,
-                language = languages,
-                format = formatParam,
-                encoding = encodingParam,
-                source = sourceParam,
-                hi = if (hearingImpaired) true else null
-            )
+            var results = emptyList<WyzieSubtitle>()
+            for (searchId in searchIds) {
+                results = fetchSubtitles(
+                    id = searchId,
+                    season = season,
+                    episode = episode,
+                    language = languages,
+                    format = formatParam,
+                    encoding = encodingParam,
+                    source = sourceParam,
+                    hi = if (hearingImpaired) true else null
+                )
+                if (results.isNotEmpty()) break
+            }
             
             val sortedResults = results.sortedWith(compareByDescending<WyzieSubtitle> { sub ->
                 val name = sub.displayName.lowercase()
@@ -361,16 +365,27 @@ class WyzieSearchRepository(
         try {
             val bytes = client.newCall(Request.Builder().url(subtitle.url).build()).execute().use { response ->
                 if (!response.isSuccessful) return@withContext Result.failure(Exception("Download failed: ${response.code}"))
-                response.body?.bytes() ?: return@withContext Result.failure(Exception("Empty body"))
+                val body = response.body ?: return@withContext Result.failure(Exception("Empty body"))
+                if (body.contentLength() > 10L * 1024 * 1024) {
+                    return@withContext Result.failure(Exception("Subtitle file is too large"))
+                }
+                body.bytes().takeIf { it.isNotEmpty() && it.size <= 10 * 1024 * 1024 }
+                    ?: return@withContext Result.failure(Exception("Empty or oversized subtitle"))
             }
             val urlExtension = subtitle.url.substringAfterLast("/", "").substringBefore("?").substringAfterLast(".", "")
-            val extension = subtitle.format?.lowercase() ?: urlExtension.takeIf { it.isNotEmpty() } ?: "srt"
+            val extension = (subtitle.format?.lowercase() ?: urlExtension.takeIf { it.isNotEmpty() } ?: "srt")
+                .substringBefore(".").takeIf { it in setOf("srt", "vtt", "ass", "ssa", "sub") } ?: "srt"
             
             val saveFolderUri = preferences.subtitleSaveFolder.get()
             // Use CRC32 checksum of mediaTitle for the folder name
             val folderName = ChecksumUtils.getCRC32(mediaTitle)
             val fullTitle = mediaTitle.substringBeforeLast(".")
-            val langCode = subtitle.language ?: "en"
+                .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+                .replace(Regex("[.]{2,}"), ".")
+                .trim('.', ' ', '_')
+                .take(120)
+                .ifBlank { "subtitle" }
+            val langCode = (subtitle.language ?: "en").replace(Regex("[^A-Za-z0-9-]"), "").take(12).ifBlank { "en" }
             val subFileName = "${fullTitle}.${langCode}.$extension"
 
             if (saveFolderUri.isNotBlank()) {

@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
+import android.net.TrafficStats
 import android.provider.OpenableColumns
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.util.Log
@@ -25,6 +27,11 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
 import xyz.mpv.rex.repository.wyzie.WyzieSubtitle
 import xyz.mpv.rex.utils.media.ChecksumUtils
 import xyz.mpv.rex.utils.media.MediaInfoParser
+import java.net.URLDecoder
+import xyz.mpv.rex.utils.media.StreamStats
+import xyz.mpv.rex.utils.media.StreamStatsFetcher
+import xyz.mpv.rex.utils.media.StreamTuning
+import xyz.mpv.rex.utils.media.TorrentStats
 import `is`.xyz.mpv.MPVLib
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
@@ -253,6 +260,33 @@ class PlayerViewModel(
   val isVolumeSliderShown = MutableStateFlow(false)
   val volumeSliderTimestamp = MutableStateFlow(0L)
   val brightnessSliderTimestamp = MutableStateFlow(0L)
+
+  // Live stats for network streams (Stremio HTTP / P2P torrents)
+  private val _streamStats = MutableStateFlow(StreamStats())
+  val streamStats: StateFlow<StreamStats> = _streamStats.asStateFlow()
+
+  /**
+   * Manual toggle for the stream-info overlay ("i" button). The overlay is also
+   * shown automatically while a network stream is still loading/buffering.
+   */
+  val streamStatsPanelVisible = MutableStateFlow(false)
+
+  /**
+   * True once the user explicitly dismissed the auto-shown overlay; suppresses
+   * auto-visible until the stream changes (or the user shows it again manually).
+   */
+  private val _streamInfoDismissed = MutableStateFlow(false)
+  val streamInfoDismissed: StateFlow<Boolean> = _streamInfoDismissed.asStateFlow()
+
+  /**
+   * One-shot latch: set the first time the video actually begins playing
+   * (time-pos > 0 and not paused-for-cache). Once set, the overlay is never
+   * auto-shown again for this playback — only the manual "i" button shows it.
+   * Reset when the stream changes or a new playback session starts.
+   */
+  private val _streamInfoAutoConsumed = MutableStateFlow(false)
+  val streamInfoAutoConsumed: StateFlow<Boolean> = _streamInfoAutoConsumed.asStateFlow()
+
   val currentBrightness =
     MutableStateFlow(
       runCatching {
@@ -315,6 +349,12 @@ class PlayerViewModel(
   // Media title for subtitle association
   var currentMediaTitle: String = ""
   private var lastAutoSelectedMediaTitle: String? = null
+
+  // Auto-subtitles for Stremio handoffs
+  private var stremioHandoff = false
+  private var lastAutoSubPath: String? = null
+  private var lastAutoSubAttemptMs = 0L
+  private val autoSubRetryIntervalMs = 30_000L
 
   // External subtitle tracking
   val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
@@ -438,6 +478,22 @@ class PlayerViewModel(
         }.onFailure { e ->
           Log.e(TAG, "Error setting volume-max: $maxVol", e)
         }
+      }
+    }
+
+    // Poll live stream stats (Stremio P2P / HTTP) every second
+    viewModelScope.launch {
+      while (isActive) {
+        updateStreamStats()
+        delay(1000)
+      }
+    }
+
+    // Auto-download subtitles for Stremio handoffs that have no embedded subs
+    viewModelScope.launch {
+      while (isActive) {
+        maybeAutoLoadStremioSubtitles()
+        delay(1000)
       }
     }
 
@@ -2235,10 +2291,432 @@ class PlayerViewModel(
     }
   }
 
+  // ==================== Stream Info (Stremio P2P / HTTP stats) ====================
+
+  private var lastTorrentStats: TorrentStats? = null
+  private var activeInfoHash: String? = null
+  private var firstTorrentAttempt: Long = 0L
+  private val statsGracePeriodMs = 15_000L
+
+  // Connected-seeder count is only reported while pieces are actively being
+  // requested (`wires` empties when the stream is buffered/idle). Retain the
+  // last known value so the overlay doesn't collapse to a misleading 0.
+  private var lastKnownSeeds = 0
+
+  // Global swarm seeder count comes from the trackers themselves; polled
+  // occasionally (HTTP trackers only) since the engine doesn't expose it.
+  private var swarmSeeds: Int? = null
+  private var lastSwarmPollMs = 0L
+  private var swarmPollInFlight = false
+  private val swarmPollIntervalMs = 60_000L
+
+  // Temporary diagnostics for buffering/stutter investigation.
+  private var lastStatsPath: String? = null
+  private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
+  private var lastHttpSampleMs = 0L
+  private var lastPausedForCache = false
+  private var lastCachePausePos = 0.0
+  private var lastDiagLogMs = 0L
+  private var lastVideoPlaying = false
+
+  fun showStreamInfo() {
+    streamStatsPanelVisible.value = true
+    _streamInfoDismissed.value = false
+  }
+
+  fun dismissStreamInfo() {
+    streamStatsPanelVisible.value = false
+    _streamInfoDismissed.value = true
+  }
+
+  fun markStremioHandoff(value: Boolean) {
+    stremioHandoff = value
+    if (value && runCatching { MPVLib.getPropertyString("path") }.getOrNull() != lastAutoSubPath) {
+      lastAutoSubPath = null
+      lastAutoSubAttemptMs = 0L
+    }
+  }
+
+  /**
+   * Checks once per second whether the currently playing Stremio stream needs
+   * an online subtitle. Runs only for network streams handed off by Stremio,
+   * skips files that already have embedded subtitle tracks, and never retries
+   * the same path after a decision has been made.
+   */
+  private suspend fun maybeAutoLoadStremioSubtitles() {
+    if (!stremioHandoff) return
+    if (!subtitlesPreferences.autoStremioSubtitles.get()) return
+    if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
+
+    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+    if (path.isNullOrBlank()) return
+    if (path == lastAutoSubPath && SystemClock.elapsedRealtime() - lastAutoSubAttemptMs < autoSubRetryIntervalMs) return
+    if (!StreamTuning.isNetworkUri(path)) return
+
+    // Wait until the demuxer has populated the track list so that embedded-sub
+    // detection is accurate (tracks arrive slightly after playback starts).
+    val trackCount = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
+    if (trackCount <= 0) return
+
+    if (hasSubtitleTracks()) {
+      lastAutoSubPath = path
+      lastAutoSubAttemptMs = Long.MAX_VALUE
+      Log.d(TAG, "AutoSub: subtitle track present, skipping online search")
+      return
+    }
+
+    lastAutoSubPath = path
+    lastAutoSubAttemptMs = SystemClock.elapsedRealtime()
+    Log.d(TAG, "AutoSub: no embedded subtitles, searching online for '$path'")
+    autoSearchAndAttach(path)
+  }
+
+  private fun hasSubtitleTracks(): Boolean {
+    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
+    for (i in 0 until count) {
+      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
+      if (type == "sub") return true
+    }
+    return false
+  }
+
+  private val RELEASE_VIDEO_EXTENSIONS =
+    setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "ts", "m2ts", "3gp", "m3u8", "mpd")
+
+  private val RELEASE_MARKERS = listOf(
+    "720p", "1080p", "2160p", "4k", "bluray", "web-dl", "webrip", "hdtv",
+    "x264", "x265", "h264", "h265", "aac", "remux", "yify", "s01", "s02", "s03",
+  )
+
+  private fun looksLikeReleaseFilename(value: String): Boolean {
+    val low = value.lowercase()
+    if (RELEASE_VIDEO_EXTENSIONS.any { low.endsWith(it) }) return true
+    val hasYear = Regex("""(?<!\d)(?:19|20)\d{2}(?!\d)""").containsMatchIn(value)
+    val hasMarker = RELEASE_MARKERS.any { low.contains(it) }
+    return hasYear && hasMarker
+  }
+
+  private fun extractReleaseNamesFromQuery(url: String): List<String> {
+    val query = runCatching { Uri.parse(url).encodedQuery }.getOrNull() ?: return emptyList()
+    val names = mutableListOf<String>()
+    for (pair in query.split("&")) {
+      val eq = pair.indexOf('=')
+      if (eq <= 0) continue
+      val value = pair.substring(eq + 1)
+      val decoded = runCatching { Uri.decode(value) }.getOrNull() ?: continue
+      if (decoded.startsWith("http://") || decoded.startsWith("https://")) continue
+      if (looksLikeReleaseFilename(decoded)) names += decoded
+    }
+    return names.distinct()
+  }
+
+  private fun decodedMetadataValues(url: String): List<String> {
+    val values = mutableListOf<String>()
+    fun collect(value: String, depth: Int) {
+      if (depth > 2 || value.isBlank()) return
+      var decoded = value
+      repeat(2) {
+        val next = runCatching { Uri.decode(decoded) }.getOrDefault(decoded)
+        if (next == decoded) return@repeat
+        decoded = next
+      }
+      values += decoded
+      val nested = runCatching { Uri.parse(decoded) }.getOrNull()
+      if (nested?.scheme in setOf("http", "https")) {
+        nested?.pathSegments?.forEach { collect(it, depth + 1) }
+        nested?.encodedQuery?.split("&")?.forEach { pair ->
+          collect(pair.substringAfter('=', ""), depth + 1)
+        }
+      }
+    }
+
+    val parsed = runCatching { Uri.parse(url) }.getOrNull()
+    parsed?.pathSegments?.forEach { collect(it, 0) }
+    parsed?.encodedQuery?.split("&")?.forEach { pair -> collect(pair.substringAfter('=', ""), 0) }
+    return values.distinct()
+  }
+
+  private fun isProxyGenericName(name: String): Boolean {
+    val low = name.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
+    if (Regex("""^(movie|film|video|stream|file|media|index|download|watch)[.\-_]\d""").containsMatchIn(low)) {
+      return true
+    }
+    return low in setOf("master", "playlist", "manifest", "index", "stream", "video", "media", "download", "watch")
+  }
+
+  private fun isUsefulMediaName(raw: String, title: String): Boolean {
+    if (raw.length !in 3..240 || !title.any { it.isLetter() }) return false
+    val low = raw.lowercase()
+    if (low.startsWith("http://") || low.startsWith("https://") || isProxyGenericName(raw)) return false
+    if (low in setOf("proxy", "direct", "external", "original", "world", "vip", "org_movie", "org_series")) return false
+    return !Regex("^[A-Za-z0-9_-]{24,}$").matches(raw)
+  }
+
+  private data class AutoSubSearch(
+    val query: String,
+    val season: Int?,
+    val episode: Int?,
+    val year: String?,
+  )
+
+  private fun autoSubSearchCandidates(path: String): List<AutoSubSearch> {
+    val fallbackName = path.substringAfterLast('/').substringBefore('?')
+      .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
+    val releaseNames = extractReleaseNamesFromQuery(path)
+    val metadataNames = decodedMetadataValues(path)
+    releaseNames.forEach { Log.d(TAG, "AutoSub: release name from query params: '$it'") }
+
+    val titleInfo = MediaInfoParser.parse(currentMediaTitle)
+    val mpvTitle = runCatching { MPVLib.getPropertyString("media-title") }.getOrNull().orEmpty()
+    val mpvTitleInfo = MediaInfoParser.parse(mpvTitle)
+    val fallbackInfo = MediaInfoParser.parse(fallbackName)
+    val metadataInfos = (releaseNames + metadataNames).distinct().map { it to MediaInfoParser.parse(it) }
+    val bestEpisodeInfo = listOf(titleInfo, mpvTitleInfo, fallbackInfo)
+      .plus(metadataInfos.map { it.second })
+      .firstOrNull { it.season != null && it.episode != null }
+    val imdbIds = Regex("""(?i)\btt\d{7,10}\b""")
+      .findAll((metadataNames + path).joinToString(" "))
+      .map { it.value.lowercase() }
+      .toList()
+
+    return buildList {
+      metadataInfos.forEach { (raw, info) ->
+        if (info.title.isNotBlank() && isUsefulMediaName(raw, info.title)) {
+          add(AutoSubSearch(info.title, info.season, info.episode, info.year))
+        }
+      }
+      if (titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle)) {
+        add(AutoSubSearch(titleInfo.title, titleInfo.season, titleInfo.episode, titleInfo.year))
+      }
+      if (mpvTitleInfo.title.isNotBlank() && !isProxyGenericName(mpvTitle)) {
+        add(AutoSubSearch(mpvTitleInfo.title, mpvTitleInfo.season, mpvTitleInfo.episode, mpvTitleInfo.year))
+      }
+      if (fallbackInfo.title.isNotBlank() && !isProxyGenericName(fallbackName)) {
+        add(AutoSubSearch(fallbackInfo.title, fallbackInfo.season, fallbackInfo.episode, fallbackInfo.year))
+      }
+      imdbIds.forEach {
+        add(AutoSubSearch(it, bestEpisodeInfo?.season, bestEpisodeInfo?.episode, bestEpisodeInfo?.year))
+      }
+    }.distinctBy { listOf(it.query.lowercase(), it.season, it.episode, it.year) }
+  }
+
+  private suspend fun autoSearchAndAttach(path: String) {
+    val mediaTitle = currentMediaTitle
+    val candidates = autoSubSearchCandidates(path)
+    if (candidates.isEmpty()) {
+      Log.d(TAG, "AutoSub: no usable title metadata found")
+      return
+    }
+
+    for (candidate in candidates) {
+      Log.d(TAG, "AutoSub: query='${candidate.query}' season=${candidate.season} episode=${candidate.episode} year=${candidate.year}")
+      val search = wyzieRepository.search(candidate.query, candidate.season, candidate.episode, candidate.year)
+      val failure = search.exceptionOrNull()
+      if (failure != null) {
+        Log.w(TAG, "AutoSub: search candidate failed for '${candidate.query}'", failure)
+        continue
+      }
+      val results = search.getOrThrow()
+      val best = results.firstOrNull()
+      if (best == null) {
+        Log.d(TAG, "AutoSub: no subtitles found for '${candidate.query}', trying fallback")
+        continue
+      }
+
+      Log.d(TAG, "AutoSub: downloading best match '${best.displayName}'")
+      if (runCatching { MPVLib.getPropertyString("path") }.getOrNull() != path) return
+      val uri = wyzieRepository.download(best, mediaTitle.ifBlank { candidate.query }).getOrElse {
+        Log.e(TAG, "AutoSub: subtitle download failed", it)
+        return
+      }
+      val currentPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+      if (currentPath != path) {
+        Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
+        return
+      }
+      _subtitleManager.addSubtitle(uri, select = true, silent = false, expectedMediaPath = path)
+      return
+    }
+    Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")
+  }
+
+  private suspend fun updateStreamStats() {
+    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+    if (path != lastStatsPath) {
+      lastStatsPath = path
+      lastTorrentStats = null
+      activeInfoHash = null
+      firstTorrentAttempt = 0L
+      lastKnownSeeds = 0
+      swarmSeeds = null
+      lastSwarmPollMs = 0L
+      swarmPollInFlight = false
+      streamStatsPanelVisible.value = false
+      _streamInfoDismissed.value = false
+      _streamInfoAutoConsumed.value = false
+      lastVideoPlaying = false
+      lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
+      lastHttpSampleMs = SystemClock.elapsedRealtime()
+    }
+    val isNetwork = path != null && StreamTuning.isNetworkUri(path)
+    if (!isNetwork) {
+      if (_streamStats.value.isNetwork) {
+        _streamStats.value = StreamStats()
+      }
+      lastTorrentStats = null
+      activeInfoHash = null
+      firstTorrentAttempt = 0L
+      lastKnownSeeds = 0
+      swarmSeeds = null
+      _streamInfoDismissed.value = false
+      _streamInfoAutoConsumed.value = false
+      lastVideoPlaying = false
+      return
+    }
+
+    val infoHash = path?.let { StreamStatsFetcher.parseInfoHash(it) }
+    var torrentStats: TorrentStats? = null
+    if (infoHash != null) {
+      if (infoHash != activeInfoHash) {
+        activeInfoHash = infoHash
+        lastTorrentStats = null
+        firstTorrentAttempt = SystemClock.elapsedRealtime()
+        lastKnownSeeds = 0
+        swarmSeeds = null
+        lastSwarmPollMs = 0L
+        _streamInfoDismissed.value = false
+        _streamInfoAutoConsumed.value = false
+        lastVideoPlaying = false
+        val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
+        Log.d(TAG, "Torrent stream detected: $infoHash, stats URL: $statsUrl")
+      }
+      val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
+      torrentStats = statsUrl?.let {
+        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchTorrentStats(it) }
+      }
+      if (torrentStats != null && runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
+        lastTorrentStats = torrentStats
+        if (torrentStats.hasWireData) {
+          lastKnownSeeds = torrentStats.seeds
+        }
+        maybePollSwarmSeeds(infoHash, torrentStats)
+      }
+    }
+
+    val bufferedSeconds =
+      (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
+        .toFloat()
+
+    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
+
+    // Grace period: if the stats endpoint never responds (e.g. a false-positive
+    // hash detection on a plain HTTP stream), degrade to the HTTP-only view.
+    val stats = if (infoHash != null) torrentStats ?: lastTorrentStats else null
+    val elapsed =
+      if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
+    val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
+
+    val now = SystemClock.elapsedRealtime()
+    val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
+    val httpSpeed = if (currentRxBytes != TrafficStats.UNSUPPORTED.toLong() &&
+      lastHttpRxBytes != TrafficStats.UNSUPPORTED.toLong() && lastHttpSampleMs > 0L && now > lastHttpSampleMs) {
+      ((currentRxBytes - lastHttpRxBytes).coerceAtLeast(0L) * 1000L) / (now - lastHttpSampleMs)
+    } else {
+      (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
+    }
+    lastHttpRxBytes = currentRxBytes
+    lastHttpSampleMs = now
+    val speedBytesPerSec = if (stats != null) stats.downloadSpeed.coerceAtLeast(0) else httpSpeed
+
+    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
+    if (pausedForCache && !lastPausedForCache) {
+      lastCachePausePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+      Log.d(
+        TAG,
+        "BUFFER pause start: pos=${lastCachePausePos} " +
+          "cache=${"%.1f".format(runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)}s",
+      )
+    }
+    if (!pausedForCache && lastPausedForCache) {
+      val resumePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+      Log.d(TAG, "BUFFER resume: pausePos=$lastCachePausePos resumePos=$resumePos " +
+        "delta=${"%.2f".format(resumePos - lastCachePausePos)}")
+    }
+    lastPausedForCache = pausedForCache
+
+    // One-shot auto-show: once the video actually begins playing, never
+    // auto-show the stream-info overlay again for this playback (manual "i"
+    // button is the only way). A position reset to ~0 means a new session.
+    val timePos = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull() ?: 0.0
+    val videoPlaying = timePos > 0.5 && !pausedForCache
+    if (videoPlaying) {
+      lastVideoPlaying = true
+      if (!_streamInfoAutoConsumed.value) {
+        _streamInfoAutoConsumed.value = true
+        Log.d(TAG, "StreamInfo: video begun (pos=$timePos), auto overlay consumed")
+      }
+    } else if (lastVideoPlaying && timePos <= 0.5) {
+      lastVideoPlaying = false
+      _streamInfoAutoConsumed.value = false
+      _streamInfoDismissed.value = false
+      Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
+    }
+
+    if (now - lastDiagLogMs > 10_000L) {
+      lastDiagLogMs = now
+      val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()
+      val codec = runCatching { MPVLib.getPropertyString("video-format") }.getOrNull()
+      val fps = runCatching { MPVLib.getPropertyDouble("container-fps") }.getOrNull()
+      val buffering = runCatching { MPVLib.getPropertyInt("cache-buffering-state") }.getOrNull()
+      val cacheSpeed = runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull()
+      Log.d(
+        TAG,
+        "DIAG isTorrent=$isTorrent pausedForCache=$pausedForCache " +
+          "buffering=$buffering cache=${"%.1f".format(bufferedSeconds)}s " +
+          "cacheSpeed=$cacheSpeed hwdec=$hwdec codec=$codec fps=$fps " +
+          "coreIdle=${runCatching { MPVLib.getPropertyBoolean("core-idle") }.getOrNull()}",
+      )
+    }
+
+    _streamStats.value =
+      StreamStats(
+        isNetwork = true,
+        isTorrent = isTorrent,
+        fetchingMetadata = isTorrent && stats == null,
+        hasTorrentStats = stats != null,
+        bufferedSeconds = bufferedSeconds,
+        seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
+        peers = stats?.peers ?: 0,
+        swarmSeeds = swarmSeeds,
+        speedBytesPerSec = speedBytesPerSec,
+      )
+  }
+
+  private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats) {
+    if (stats.trackerUrls.isEmpty() || swarmPollInFlight) return
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastSwarmPollMs < swarmPollIntervalMs) return
+    lastSwarmPollMs = now
+    swarmPollInFlight = true
+    val expectedPath = lastStatsPath
+    viewModelScope.launch {
+      try {
+        val result = withContext(Dispatchers.IO) {
+          StreamStatsFetcher.fetchSwarmSeeds(infoHash, stats.trackerUrls)
+        }
+        if (activeInfoHash == infoHash && lastStatsPath == expectedPath &&
+          runCatching { MPVLib.getPropertyString("path") }.getOrNull() == expectedPath) {
+          result?.let { swarmSeeds = it }
+        }
+      } finally {
+        swarmPollInFlight = false
+      }
+    }
+  }
+
   // ==================== Ambient Mode Integration ====================
 
   fun toggleAmbientMode() = ambientModeManager.toggleAmbientMode()
-
   fun onOrientationChanged(isPortrait: Boolean) = ambientModeManager.onOrientationChanged(isPortrait)
 
   fun resetAmbientMode() = ambientModeManager.resetAmbientMode()
