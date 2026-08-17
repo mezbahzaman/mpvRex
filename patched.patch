@@ -38554,7 +38554,7 @@ index 1c39a0b..e813caf 100644
 -
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/ExtraPreferencesScreen.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/ExtraPreferencesScreen.kt
 new file mode 100644
-index 0000000..8102344
+index 0000000..d6bd469
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/preferences/ExtraPreferencesScreen.kt
 @@ -0,0 +1,328 @@
@@ -38568,6 +38568,7 @@ index 0000000..8102344
 +import androidx.compose.foundation.layout.fillMaxWidth
 +import androidx.compose.foundation.layout.padding
 +import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.text.KeyboardOptions
 +import androidx.compose.material.icons.Icons
 +import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 +import androidx.compose.material.icons.outlined.Delete
@@ -38592,7 +38593,6 @@ index 0000000..8102344
 +import androidx.compose.ui.platform.LocalContext
 +import androidx.compose.ui.res.stringResource
 +import androidx.compose.ui.text.font.FontWeight
-+import androidx.compose.ui.text.input.KeyboardOptions
 +import androidx.compose.ui.text.input.KeyboardType
 +import androidx.compose.ui.text.style.TextOverflow
 +import androidx.compose.ui.unit.dp
