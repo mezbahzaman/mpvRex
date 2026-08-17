@@ -22,7 +22,7 @@ index e059044..14c4cee 100644
  .idea
  .DS_Store
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..6b7ab54 100644
+index b937ac6..f2778e7 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -31,8 +31,8 @@ index b937ac6..6b7ab54 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 217
-+    versionName = "4.6.5"
++    versionCode = 218
++    versionName = "4.6.6"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -234,7 +234,7 @@ index 03596c2..39fe644 100644
        "cache-buffering-state" to MPVLib.MpvFormat.MPV_FORMAT_INT64,
        "audio-delay" to MPVLib.MpvFormat.MPV_FORMAT_DOUBLE,
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
-index 09ac607..49592e8 100644
+index 09ac607..f9d2ae4 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerActivity.kt
 @@ -57,6 +57,7 @@ import xyz.mpv.rex.ui.player.controls.PlayerControls
@@ -418,8 +418,8 @@ index 09ac607..49592e8 100644
 +    val uri = intent.data?.toString() ?: return false
 +    if (!StreamTuning.isNetworkUri(uri)) return false
 +    if (StreamTuning.isStremioTorrentUri(uri)) return true
-+    return intent.getBooleanExtra("return_result", false) &&
-+      (intent.hasExtra("position") || intent.hasExtra("startfrom"))
++    return intent.getBooleanExtra("return_result", false) ||
++      intent.hasExtra("subtitleUrl") || intent.hasExtra("subtitles")
 +  }
 +
    /**
@@ -561,18 +561,20 @@ index 09ac607..49592e8 100644
      /**
       * Maximum volume for MPV in percent.
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-index feecc99..9c51a2a 100644
+index feecc99..514fd7e 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/PlayerViewModel.kt
-@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
+@@ -4,7 +4,9 @@ import android.content.Context
+ import android.content.pm.ActivityInfo
  import android.media.AudioManager
  import android.net.Uri
++import android.net.TrafficStats
  import android.provider.OpenableColumns
 +import android.os.SystemClock
  import android.provider.Settings
  import android.util.DisplayMetrics
  import android.util.Log
-@@ -25,6 +26,11 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
+@@ -25,6 +27,11 @@ import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
  import xyz.mpv.rex.repository.wyzie.WyzieSubtitle
  import xyz.mpv.rex.utils.media.ChecksumUtils
  import xyz.mpv.rex.utils.media.MediaInfoParser
@@ -584,7 +586,7 @@ index feecc99..9c51a2a 100644
  import `is`.xyz.mpv.MPVLib
  import kotlinx.collections.immutable.persistentListOf
  import kotlinx.collections.immutable.toImmutableList
-@@ -253,6 +259,33 @@ class PlayerViewModel(
+@@ -253,6 +260,33 @@ class PlayerViewModel(
    val isVolumeSliderShown = MutableStateFlow(false)
    val volumeSliderTimestamp = MutableStateFlow(0L)
    val brightnessSliderTimestamp = MutableStateFlow(0L)
@@ -618,7 +620,7 @@ index feecc99..9c51a2a 100644
    val currentBrightness =
      MutableStateFlow(
        runCatching {
-@@ -316,6 +349,12 @@ class PlayerViewModel(
+@@ -316,6 +350,12 @@ class PlayerViewModel(
    var currentMediaTitle: String = ""
    private var lastAutoSelectedMediaTitle: String? = null
  
@@ -631,7 +633,7 @@ index feecc99..9c51a2a 100644
    // External subtitle tracking
    val externalSubtitles: List<String> get() = _subtitleManager.externalSubtitles
  
-@@ -441,6 +480,22 @@ class PlayerViewModel(
+@@ -441,6 +481,22 @@ class PlayerViewModel(
        }
      }
  
@@ -654,7 +656,7 @@ index feecc99..9c51a2a 100644
      // Monitor duration and AB loop changes to automatically enable precise seeking
      viewModelScope.launch {
        combine(
-@@ -2235,10 +2290,383 @@ class PlayerViewModel(
+@@ -2235,10 +2291,432 @@ class PlayerViewModel(
      }
    }
  
@@ -679,6 +681,8 @@ index feecc99..9c51a2a 100644
 +
 +  // Temporary diagnostics for buffering/stutter investigation.
 +  private var lastStatsPath: String? = null
++  private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
++  private var lastHttpSampleMs = 0L
 +  private var lastPausedForCache = false
 +  private var lastCachePausePos = 0.0
 +  private var lastDiagLogMs = 0L
@@ -775,12 +779,46 @@ index feecc99..9c51a2a 100644
 +    return names.distinct()
 +  }
 +
++  private fun decodedMetadataValues(url: String): List<String> {
++    val values = mutableListOf<String>()
++    fun collect(value: String, depth: Int) {
++      if (depth > 2 || value.isBlank()) return
++      var decoded = value
++      repeat(2) {
++        val next = runCatching { Uri.decode(decoded) }.getOrDefault(decoded)
++        if (next == decoded) return@repeat
++        decoded = next
++      }
++      values += decoded
++      val nested = runCatching { Uri.parse(decoded) }.getOrNull()
++      if (nested?.scheme in setOf("http", "https")) {
++        nested?.pathSegments?.forEach { collect(it, depth + 1) }
++        nested?.encodedQuery?.split("&")?.forEach { pair ->
++          collect(pair.substringAfter('=', ""), depth + 1)
++        }
++      }
++    }
++
++    val parsed = runCatching { Uri.parse(url) }.getOrNull()
++    parsed?.pathSegments?.forEach { collect(it, 0) }
++    parsed?.encodedQuery?.split("&")?.forEach { pair -> collect(pair.substringAfter('=', ""), 0) }
++    return values.distinct()
++  }
++
 +  private fun isProxyGenericName(name: String): Boolean {
 +    val low = name.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
 +    if (Regex("""^(movie|film|video|stream|file|media|index|download|watch)[.\-_]\d""").containsMatchIn(low)) {
 +      return true
 +    }
 +    return low in setOf("master", "playlist", "manifest", "index", "stream", "video", "media", "download", "watch")
++  }
++
++  private fun isUsefulMediaName(raw: String, title: String): Boolean {
++    if (raw.length !in 3..240 || !title.any { it.isLetter() }) return false
++    val low = raw.lowercase()
++    if (low.startsWith("http://") || low.startsWith("https://") || isProxyGenericName(raw)) return false
++    if (low in setOf("proxy", "direct", "external", "original", "world", "vip", "org_movie", "org_series")) return false
++    return !Regex("^[A-Za-z0-9_-]{24,}$").matches(raw)
 +  }
 +
 +  private data class AutoSubSearch(
@@ -794,26 +832,39 @@ index feecc99..9c51a2a 100644
 +    val fallbackName = path.substringAfterLast('/').substringBefore('?')
 +      .let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: it }
 +    val releaseNames = extractReleaseNamesFromQuery(path)
++    val metadataNames = decodedMetadataValues(path)
 +    releaseNames.forEach { Log.d(TAG, "AutoSub: release name from query params: '$it'") }
 +
 +    val titleInfo = MediaInfoParser.parse(currentMediaTitle)
++    val mpvTitle = runCatching { MPVLib.getPropertyString("media-title") }.getOrNull().orEmpty()
++    val mpvTitleInfo = MediaInfoParser.parse(mpvTitle)
 +    val fallbackInfo = MediaInfoParser.parse(fallbackName)
-+    val releaseInfos = releaseNames.map { it to MediaInfoParser.parse(it) }
++    val metadataInfos = (releaseNames + metadataNames).distinct().map { it to MediaInfoParser.parse(it) }
++    val bestEpisodeInfo = listOf(titleInfo, mpvTitleInfo, fallbackInfo)
++      .plus(metadataInfos.map { it.second })
++      .firstOrNull { it.season != null && it.episode != null }
 +    val imdbIds = Regex("""(?i)\btt\d{7,10}\b""")
-+      .findAll(runCatching { URLDecoder.decode(path, "UTF-8") }.getOrDefault(path))
++      .findAll((metadataNames + path).joinToString(" "))
 +      .map { it.value.lowercase() }
 +      .toList()
 +
 +    return buildList {
-+      imdbIds.forEach { add(AutoSubSearch(it, null, null, null)) }
-+      releaseInfos.forEach { (_, info) ->
-+        if (info.title.isNotBlank()) add(AutoSubSearch(info.title, info.season, info.episode, info.year))
++      metadataInfos.forEach { (raw, info) ->
++        if (info.title.isNotBlank() && isUsefulMediaName(raw, info.title)) {
++          add(AutoSubSearch(info.title, info.season, info.episode, info.year))
++        }
 +      }
 +      if (titleInfo.title.isNotBlank() && !isProxyGenericName(currentMediaTitle)) {
 +        add(AutoSubSearch(titleInfo.title, titleInfo.season, titleInfo.episode, titleInfo.year))
 +      }
++      if (mpvTitleInfo.title.isNotBlank() && !isProxyGenericName(mpvTitle)) {
++        add(AutoSubSearch(mpvTitleInfo.title, mpvTitleInfo.season, mpvTitleInfo.episode, mpvTitleInfo.year))
++      }
 +      if (fallbackInfo.title.isNotBlank() && !isProxyGenericName(fallbackName)) {
 +        add(AutoSubSearch(fallbackInfo.title, fallbackInfo.season, fallbackInfo.episode, fallbackInfo.year))
++      }
++      imdbIds.forEach {
++        add(AutoSubSearch(it, bestEpisodeInfo?.season, bestEpisodeInfo?.episode, bestEpisodeInfo?.year))
 +      }
 +    }.distinctBy { listOf(it.query.lowercase(), it.season, it.episode, it.year) }
 +  }
@@ -873,6 +924,8 @@ index feecc99..9c51a2a 100644
 +      _streamInfoDismissed.value = false
 +      _streamInfoAutoConsumed.value = false
 +      lastVideoPlaying = false
++      lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
++      lastHttpSampleMs = SystemClock.elapsedRealtime()
 +    }
 +    val isNetwork = path != null && StreamTuning.isNetworkUri(path)
 +    if (!isNetwork) {
@@ -923,12 +976,6 @@ index feecc99..9c51a2a 100644
 +      (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
 +        .toFloat()
 +
-+    // mpv can retain the last non-zero cache-speed value while a stream is
-+    // paused, fully buffered, or finished. Do not present that stale value as
-+    // active network traffic; keep showing downloads during cache recovery.
-+    val paused = runCatching { MPVLib.getPropertyBoolean("pause") }.getOrNull() ?: false
-+    val eofReached = runCatching { MPVLib.getPropertyBoolean("eof-reached") }.getOrNull() ?: false
-+    val demuxerCacheIdle = runCatching { MPVLib.getPropertyBoolean("demuxer-cache-idle") }.getOrNull() ?: false
 +    val pausedForCache = runCatching { MPVLib.getPropertyBoolean("paused-for-cache") }.getOrNull() ?: false
 +
 +    // Grace period: if the stats endpoint never responds (e.g. a false-positive
@@ -938,12 +985,17 @@ index feecc99..9c51a2a 100644
 +      if (firstTorrentAttempt != 0L) SystemClock.elapsedRealtime() - firstTorrentAttempt else 0L
 +    val isTorrent = infoHash != null && (stats != null || elapsed < statsGracePeriodMs)
 +
-+    val speedBytesPerSec = if (!isTorrent && (paused || demuxerCacheIdle || eofReached)) {
-+      0L
++    val now = SystemClock.elapsedRealtime()
++    val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
++    val httpSpeed = if (currentRxBytes != TrafficStats.UNSUPPORTED.toLong() &&
++      lastHttpRxBytes != TrafficStats.UNSUPPORTED.toLong() && lastHttpSampleMs > 0L && now > lastHttpSampleMs) {
++      ((currentRxBytes - lastHttpRxBytes).coerceAtLeast(0L) * 1000L) / (now - lastHttpSampleMs)
 +    } else {
-+      if (stats != null) stats.downloadSpeed.coerceAtLeast(0)
-+      else (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
++      (runCatching { MPVLib.getPropertyDouble("cache-speed") }.getOrNull() ?: 0.0).toLong()
 +    }
++    lastHttpRxBytes = currentRxBytes
++    lastHttpSampleMs = now
++    val speedBytesPerSec = if (stats != null) stats.downloadSpeed.coerceAtLeast(0) else httpSpeed
 +
 +    // --- Temporary diagnostics: cache pause/resume edges + periodic state ---
 +    if (pausedForCache && !lastPausedForCache) {
@@ -979,7 +1031,6 @@ index feecc99..9c51a2a 100644
 +      Log.d(TAG, "StreamInfo: new session (position reset), auto overlay re-enabled")
 +    }
 +
-+    val now = SystemClock.elapsedRealtime()
 +    if (now - lastDiagLogMs > 10_000L) {
 +      lastDiagLogMs = now
 +      val hwdec = runCatching { MPVLib.getPropertyString("hwdec-current") }.getOrNull()
@@ -1063,7 +1114,7 @@ index fd4c01d..b8f66e0 100644
                  
                  // Store mapping for reliable physical deletion later
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
-index b862b32..ae83c0b 100644
+index b862b32..de6f4ee 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 @@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
@@ -1207,7 +1258,7 @@ index b862b32..ae83c0b 100644
                }
              }
            }
-@@ -1890,3 +1950,63 @@ fun PlayerControls(
+@@ -1890,3 +1950,62 @@ fun PlayerControls(
    }
  }
  
@@ -1245,8 +1296,8 @@ index b862b32..ae83c0b 100644
 +              bufferedSeconds,
 +              streamStats.seeds,
 +              streamStats.peers,
-+              speedText,
 +              swarmSeeds,
++              speedText,
 +            )
 +          } else {
 +            stringResource(
@@ -1270,7 +1321,6 @@ index b862b32..ae83c0b 100644
 +    }
 +  }
 +}
-+
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
 index 1c39a0b..34ae325 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControlsShared.kt
@@ -1399,16 +1449,27 @@ index 8284ff2..fee01b4 100644
                  value = overrideAss,
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
 new file mode 100644
-index 0000000..3fd1e97
+index 0000000..4feb91e
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcher.kt
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,291 @@
 +package xyz.mpv.rex.utils.media
 +
 +import android.net.Uri
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
 +import org.json.JSONObject
 +import java.net.HttpURLConnection
++import java.net.DatagramPacket
++import java.net.DatagramSocket
++import java.net.InetAddress
++import java.net.URI
 +import java.net.URL
++import java.nio.ByteBuffer
++import java.nio.ByteOrder
++import kotlin.random.Random
 +
 +/**
 + * Live stats for network streams (Stremio HTTP / P2P torrents).
@@ -1435,7 +1496,7 @@ index 0000000..3fd1e97
 +  val peers: Int,
 +  /** True when the engine reported active wire connections this poll (real seeder data). */
 +  val hasWireData: Boolean,
-+  /** HTTP(S) tracker announce URLs advertised by the engine's `sources[]`. */
++  /** Tracker URLs advertised by the engine's `sources[]`. */
 +  val trackerUrls: List<String>,
 +)
 +
@@ -1492,7 +1553,7 @@ index 0000000..3fd1e97
 +            seeds = if (hasWireData) countSeeders(json) else 0,
 +            peers = json.optInt("peers", 0),
 +            hasWireData = hasWireData,
-+            trackerUrls = httpTrackerUrls(json),
++            trackerUrls = trackerUrls(json),
 +          )
 +        }
 +      }
@@ -1504,24 +1565,35 @@ index 0000000..3fd1e97
 +  }
 +
 +  /**
-+   * Queries the torrent's HTTP(S) trackers (announce) and returns the maximum
++   * Queries the torrent's HTTP(S) and UDP trackers and returns the maximum
 +   * tracker-reported seeder count (`complete`). Returns null when every tracker
-+   * fails or none are HTTP(S). Trackers are the only reliable source of the
++   * fails. Trackers are the only reliable source of the
 +   * global swarm seeder count; WebTorrent's own engine does not expose one.
 +   */
-+  fun fetchSwarmSeeds(infoHash: String, trackerUrls: List<String>): Int? {
-+    val rawHash = hexToBytes(infoHash) ?: return null
++  suspend fun fetchSwarmSeeds(infoHash: String, trackerUrls: List<String>): Int? = coroutineScope {
++    val rawHash = hexToBytes(infoHash) ?: return@coroutineScope null
 +    val infoHashParam = percentEncode(rawHash)
 +    val peerId = percentEncode("-MP0001-0123456789ab".toByteArray(Charsets.ISO_8859_1))
 +    val query =
 +      "info_hash=$infoHashParam&peer_id=$peerId&port=6881" +
-+        "&uploaded=0&downloaded=0&left=0&compact=1&numwant=0&event=started"
++        "&uploaded=0&downloaded=0&left=1&compact=1&numwant=0"
 +
-+    var maxSeeds: Int? = null
-+    for (tracker in trackerUrls) {
++    trackerUrls.distinct().take(12).map { tracker ->
++      async(Dispatchers.IO) {
++        when {
++          tracker.startsWith("udp://", ignoreCase = true) -> fetchUdpTrackerSeeds(rawHash, tracker)
++          tracker.startsWith("http://", ignoreCase = true) || tracker.startsWith("https://", ignoreCase = true) ->
++            fetchHttpTrackerSeeds(tracker, query)
++          else -> null
++        }
++      }
++    }.awaitAll().filterNotNull().maxOrNull()
++  }
++
++  private fun fetchHttpTrackerSeeds(tracker: String, query: String): Int? {
 +      var connection: HttpURLConnection? = null
-+      try {
-+        val announceUrl = "$tracker?$query"
++      return try {
++        val announceUrl = "$tracker${if (tracker.contains('?')) "&" else "?"}$query"
 +        connection = URL(announceUrl).openConnection() as HttpURLConnection
 +        connection.connectTimeout = 3000
 +        connection.readTimeout = 3000
@@ -1529,17 +1601,80 @@ index 0000000..3fd1e97
 +        connection.setRequestProperty("User-Agent", "mpvRex/4.5")
 +        if (connection.responseCode in 200..299) {
 +          val body = connection.inputStream.readBytes().toString(Charsets.ISO_8859_1)
-+          bencodeInt(body, "complete")?.let { complete ->
-+            maxSeeds = maxOf(maxSeeds ?: 0, complete)
-+          }
-+        }
++          bencodeInt(body, "complete")
++        } else null
 +      } catch (_: Exception) {
-+        // Individual trackers often fail; keep trying the rest.
++        null
 +      } finally {
 +        connection?.disconnect()
 +      }
-+    }
-+    return maxSeeds
++  }
++
++  /** BEP 15 scrape: returns the tracker's complete/seeder count without announcing. */
++  private fun fetchUdpTrackerSeeds(infoHash: ByteArray, tracker: String): Int? {
++    val uri = runCatching { URI(tracker) }.getOrNull() ?: return null
++    val host = uri.host ?: return null
++    val port = uri.port.takeIf { it > 0 } ?: 80
++    val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return null
++    return runCatching {
++      DatagramSocket().use { socket ->
++        socket.soTimeout = 2500
++        val connectTx = Random.nextInt()
++        val connect = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
++          .putLong(0x41727101980L).putInt(0).putInt(connectTx).array()
++        socket.send(DatagramPacket(connect, connect.size, address, port))
++        val connectResponse = ByteArray(16)
++        val connectPacket = DatagramPacket(connectResponse, connectResponse.size)
++        socket.receive(connectPacket)
++        val connected = ByteBuffer.wrap(connectResponse, 0, connectPacket.length).order(ByteOrder.BIG_ENDIAN)
++        if (connectPacket.length < 16 || connected.int != 0 || connected.int != connectTx) return@use null
++        val connectionId = connected.long
++
++        val scrapeTx = Random.nextInt()
++        val scrape = ByteBuffer.allocate(36).order(ByteOrder.BIG_ENDIAN)
++          .putLong(connectionId).putInt(2).putInt(scrapeTx).put(infoHash).array()
++        socket.send(DatagramPacket(scrape, scrape.size, address, port))
++        val scrapeResponse = ByteArray(32)
++        val scrapePacket = DatagramPacket(scrapeResponse, scrapeResponse.size)
++        val scraped = runCatching {
++          socket.receive(scrapePacket)
++          val result = ByteBuffer.wrap(scrapeResponse, 0, scrapePacket.length).order(ByteOrder.BIG_ENDIAN)
++          if (scrapePacket.length < 20 || result.int != 2 || result.int != scrapeTx) null
++          else result.int.coerceAtLeast(0)
++        }.getOrNull()
++        scraped ?: fetchUdpAnnounceSeeds(socket, address, port, connectionId, infoHash)
++      }
++    }.getOrNull()
++  }
++
++  private fun fetchUdpAnnounceSeeds(
++    socket: DatagramSocket,
++    address: InetAddress,
++    port: Int,
++    connectionId: Long,
++    infoHash: ByteArray,
++  ): Int? {
++    val transactionId = Random.nextInt()
++    val peerId = "-MP0001-0123456789ab".toByteArray(Charsets.ISO_8859_1)
++    val announce = ByteBuffer.allocate(98).order(ByteOrder.BIG_ENDIAN)
++      .putLong(connectionId).putInt(1).putInt(transactionId)
++      .put(infoHash).put(peerId)
++      .putLong(0).putLong(1).putLong(0)
++      .putInt(0).putInt(0).putInt(Random.nextInt()).putInt(-1).putShort(6881.toShort())
++      .array()
++    return runCatching {
++      socket.send(DatagramPacket(announce, announce.size, address, port))
++      val response = ByteArray(32)
++      val packet = DatagramPacket(response, response.size)
++      socket.receive(packet)
++      val result = ByteBuffer.wrap(response, 0, packet.length).order(ByteOrder.BIG_ENDIAN)
++      if (packet.length < 20 || result.int != 1 || result.int != transactionId) null
++      else {
++        result.int // interval
++        result.int // leechers
++        result.int.coerceAtLeast(0)
++      }
++    }.getOrNull()
 +  }
 +
 +  /** Reads a bencoded integer value: `{key-len}:{key}i{value}e`. */
@@ -1554,18 +1689,25 @@ index 0000000..3fd1e97
 +    return body.substring(valueStart + 1, valueEnd).toIntOrNull()
 +  }
 +
-+  /** HTTP(S) tracker announce URLs from the engine's `sources[]`. */
-+  private fun httpTrackerUrls(json: JSONObject): List<String> {
++  /** HTTP(S)/UDP tracker URLs from string or object entries in `sources[]`. */
++  internal fun trackerUrls(json: JSONObject): List<String> {
 +    val sources = json.optJSONArray("sources") ?: return emptyList()
-+    val urls = mutableListOf<String>()
++    val rawUrls = mutableListOf<String>()
 +    for (i in 0 until sources.length()) {
-+      val url = sources.optJSONObject(i)?.optString("url") ?: continue
-+      if (url.startsWith("tracker:http://") || url.startsWith("tracker:https://")) {
-+        urls.add(url.removePrefix("tracker:"))
++      val entry = sources.opt(i)
++      rawUrls += when (entry) {
++        is String -> entry
++        is JSONObject -> entry.optString("url")
++        else -> ""
 +      }
 +    }
-+    return urls
++    return normalizeTrackerUrls(rawUrls)
 +  }
++
++  internal fun normalizeTrackerUrls(values: List<String>): List<String> =
++    values.map { it.removePrefix("tracker:") }
++      .filter { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("udp://") }
++      .distinct()
 +
 +  private fun countSeeders(json: JSONObject): Int {
 +    val wires = json.optJSONArray("wires") ?: return 0
@@ -1701,7 +1843,7 @@ index b99862e..3c65996 100644
              val r = rParts.getOrElse(i) { 0 }
              val c = cParts.getOrElse(i) { 0 }
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 243e0b7..b9fe28f 100644
+index 243e0b7..95b9b4c 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -182,6 +182,11 @@
@@ -1711,7 +1853,7 @@ index 243e0b7..b9fe28f 100644
 +    <string name="buffering_percent">Buffering %1$d%%</string>
 +    <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
 +    <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$s</string>
-+    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$s • %5$d in swarm</string>
++    <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$s</string>
 +    <string name="stream_stats_line_http">%1$ds buffered • %2$s</string>
      <string name="pref_player_remember_brightness">Remember display brightness</string>
  
@@ -1733,3 +1875,33 @@ index 243e0b7..b9fe28f 100644
      <string name="btn_label_none">None</string>
  
  
+diff --git a/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt
+new file mode 100644
+index 0000000..caa3c78
+--- /dev/null
++++ b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamStatsFetcherTest.kt
+@@ -0,0 +1,24 @@
++package xyz.mpv.rex.utils.media
++
++import org.junit.Assert.assertEquals
++import org.junit.Test
++
++class StreamStatsFetcherTest {
++  @Test
++  fun normalizesTrackerSources() {
++    assertEquals(
++      listOf("udp://tracker.example:6969/announce", "https://tracker.example/announce"),
++      StreamStatsFetcher.normalizeTrackerUrls(listOf(
++        "tracker:udp://tracker.example:6969/announce",
++        "tracker:https://tracker.example/announce",
++        "dht:ignored",
++      )),
++    )
++  }
++
++  @Test
++  fun formatsZeroAndMegabyteSpeeds() {
++    assertEquals("0 KB/s", StreamStatsFetcher.formatSpeed(0))
++    assertEquals("1.3 MB/s", StreamStatsFetcher.formatSpeed(1_300_000))
++  }
++}
