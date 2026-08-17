@@ -95,7 +95,7 @@ class TrackSelector(
     val image: Boolean
   )
 
-  suspend fun onFileLoaded(hasState: Boolean = false) {
+  suspend fun onFileLoaded(hasState: Boolean = false, savedSubtitleId: Int? = null) {
     var attempts = 0
     val maxAttempts = 20
     
@@ -118,7 +118,7 @@ class TrackSelector(
     }
   
     ensureAudioTrackSelected(tracks, hasState)
-    ensureSubtitleTrackSelected(tracks, hasState)
+    ensureSubtitleTrackSelected(tracks, hasState, savedSubtitleId)
   }
 
   private fun readTracks(count: Int): List<Track> {
@@ -318,7 +318,7 @@ class TrackSelector(
   // 2. SUBTITLE SELECTION LOGIC (Multi-Pass Preserved)
   // ==================================================
 
-  private suspend fun ensureSubtitleTrackSelected(tracks: List<Track>, hasState: Boolean) {
+  private suspend fun ensureSubtitleTrackSelected(tracks: List<Track>, hasState: Boolean, savedSubtitleId: Int?) {
     try {
       val subTracks = tracks.filter { it.type == "sub" }
 
@@ -336,8 +336,9 @@ class TrackSelector(
 
       val currentSid = MPVLib.getPropertyInt("sid") ?: 0
 
-      // Respect manual "Subtitles Off" state in saved DB state
-      if (hasState && currentSid == 0) {
+      // A saved row with sid=0 can exist before the user makes a subtitle choice.
+      // Preserve only an explicit in-session "off" choice; otherwise select by language.
+      if (hasState && savedSubtitleId == -1) {
         Log.d(TAG, "Smart Sub: User disabled subtitles manually. Respecting choice.")
         rememberSubtitleTrack(null, null, isOff = true)
         return
@@ -489,4 +490,3 @@ class TrackSelector(
     }
   }
 }
-

@@ -11,6 +11,35 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
+private val bundledSubtitleFontAssets =
+  listOf(
+    "bundled_fonts/roboto/Roboto-Variable.ttf",
+    "bundled_fonts/lato/Lato-Regular.ttf",
+    "bundled_fonts/noto_sans/NotoSans-Variable.ttf",
+  )
+
+/** Adds bundled fonts to the user-visible font directory without replacing user files. */
+fun copyBundledSubtitleFonts(context: Context) {
+  runCatching {
+    val destinationDir = File(context.filesDir, "fonts").apply { mkdirs() }
+    bundledSubtitleFontAssets.forEach { assetPath ->
+      val destination = File(destinationDir, assetPath.substringAfterLast('/'))
+      if (destination.createNewFile()) {
+        try {
+          context.assets.open(assetPath).use { input ->
+            destination.outputStream().use { output -> input.copyTo(output) }
+          }
+        } catch (e: Exception) {
+          destination.delete()
+          throw e
+        }
+      }
+    }
+  }.onFailure { e ->
+    Log.e("SubtitleFonts", "Error copying bundled fonts", e)
+  }
+}
+
 /** Copies font files from the selected directory to the app's internal storage. */
 @SuppressLint("UseKtx")
 fun copyFontsFromDirectory(
