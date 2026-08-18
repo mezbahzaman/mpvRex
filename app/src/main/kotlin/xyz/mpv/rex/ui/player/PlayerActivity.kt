@@ -43,6 +43,7 @@ import xyz.mpv.rex.domain.playbackstate.repository.PlaybackStateRepository
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
 import xyz.mpv.rex.preferences.AdvancedPreferences
 import xyz.mpv.rex.preferences.DecoderPreferences
+import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.domain.hdr.HdrToysManager
 import xyz.mpv.rex.preferences.AppearancePreferences
 import xyz.mpv.rex.preferences.AudioPreferences
@@ -57,6 +58,7 @@ import xyz.mpv.rex.ui.player.controls.PlayerControls
 import xyz.mpv.rex.ui.theme.MpvexPlayerTheme
 import xyz.mpv.rex.utils.history.RecentlyPlayedOps
 import xyz.mpv.rex.utils.media.HttpUtils
+import xyz.mpv.rex.utils.media.StreamTuning
 import xyz.mpv.rex.utils.media.SubtitleOps
 import xyz.mpv.rex.utils.media.M3UParser
 import xyz.mpv.rex.utils.media.FolderPlaylistOps
@@ -67,12 +69,15 @@ import xyz.mpv.rex.domain.media.model.Video
 import xyz.mpv.rex.utils.media.MediaFormatter
 import xyz.mpv.rex.utils.storage.FileTypeUtils
 import xyz.mpv.rex.utils.storage.FileFilterUtils
+import xyz.mpv.rex.repository.MediaFileRepository
 import xyz.mpv.rex.ui.player.SingleActionGesture
 import com.github.k1rakishou.fsaf.FileManager
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -152,6 +157,8 @@ class PlayerActivity :
    */
   private val subtitlesPreferences: SubtitlesPreferences by inject()
 
+  private val extraPreferences: ExtraPreferences by inject()
+
   /**
    * Preferences for advanced settings.
    */
@@ -217,6 +224,7 @@ class PlayerActivity :
    * For network streams, this includes a hash of the URI to ensure uniqueness.
    */
   private var mediaIdentifier = ""
+  private var legacyMediaIdentifier = ""
 
   /**
    * Helper for managing Picture-in-Picture mode.
@@ -231,7 +239,13 @@ class PlayerActivity :
   private var noisyReceiverRegistered = false
   private var mpvInitialized = false // Track MPV initialization state
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
+  private val playbackStateSaveMutex = Mutex()
+  private var playbackStateSaveSequence = 0L
+  private var lastPersistedPlaybackStateSequence = 0L
   private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
+  private var intentPositionMs = POSITION_NOT_SET.toLong() // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
+  private var shouldReturnStremioResult = false
+  private var loadedPlaybackState: PlaybackStateEntity? = null
   private var lastVid = -1 // Track video track for background playback optimization
   private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
   private var inheritedNativeSession = false // MPV ownership came from HeadlessPlaybackController
@@ -347,6 +361,9 @@ class PlayerActivity :
     setContentView(binding.root)
 
     pendingIntentExtras = true
+    intentPositionMs = POSITION_NOT_SET.toLong()
+    shouldReturnStremioResult = StremioHandoff.requestedResult(intent)
+    logIntentExtras("onCreate", intent)
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
     // a second time.
@@ -357,6 +374,9 @@ class PlayerActivity :
       setupMPV()
     }
     viewModel.onMpvCoreInitialized()
+    // Mark after the MPV core exists: constructing the ViewModel (first access) reads MPV
+    // properties, which requires an initialized core.
+    viewModel.markStremioHandoff(isStremioHandoff(intent))
     MediaPlaybackService.createNotificationChannel(this)
     setupAudio()
     setupBackPressHandler()
@@ -460,7 +480,7 @@ class PlayerActivity :
       val mpvTitle = runCatching { MPVLib.getPropertyString("media-title") }.getOrNull()
       fileName = if (!mpvTitle.isNullOrBlank()) mpvTitle else (intent.data?.lastPathSegment ?: "Unknown Video")
     }
-    mediaIdentifier = getMediaIdentifier(intent, fileName)
+    updateMediaIdentifiers(intent, fileName)
 
     // Set HTTP headers (including referer) BEFORE playing the file
     setHttpHeadersFromExtras(intent.extras)
@@ -473,18 +493,20 @@ class PlayerActivity :
     val isAlreadyPlayingCurrent = !hasPlayableMediaInIntent && !currentMpvPath.isNullOrBlank() && currentMpvPath != "null"
 
     if (hasPlayableMediaInIntent) {
+      viewModel.setAutoSubtitleSource(extractUriFromIntent(intent)?.toString())
       if (isManualBackgroundPlayback || isInBackgroundPlayback) {
         isManualBackgroundPlayback = false
         endBackgroundPlayback()
         enableVideoAfterBackground()
         miniPlayerStateManager.clearState()
       }
-      if (isUriM3U(playableUri)) {
+      if (isM3uPlaylistUri(playableUri)) {
         loadM3uPlaylistOrPlayDirectly(playableUri)
       } else {
         if (playerPreferences.savePositionOnQuit.get()) {
           runCatching { MPVLib.setPropertyBoolean("pause", true) }
         }
+        applyStreamTuning(playableUri)
         player.playFile(playableUri)
       }
     } else if (isAlreadyPlayingCurrent) {
@@ -1178,7 +1200,7 @@ class PlayerActivity :
    * Processes intent extras to set initial playback position, subtitles, and HTTP headers.
    *
    * This method checks the intent extras for the following keys:
-   * - "position": The initial playback position in seconds.
+   * - "position": The initial playback position in milliseconds.
    * - "subs": A list of subtitle URIs to add.
    * - "subs.enable": A list of subtitle URIs to enable.
    * - "headers": A list of HTTP headers to set for network playback.
@@ -1188,12 +1210,31 @@ class PlayerActivity :
   private fun setIntentExtras(extras: Bundle?) {
     if (extras == null) return
 
-    extras.getInt("position", POSITION_NOT_SET).takeIf { it != POSITION_NOT_SET }?.let {
-      MPVLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
+    StremioHandoff.positionMs(extras)?.let {
+      intentPositionMs = it
+      MPVLib.setPropertyDouble("time-pos", intentPositionMs.toDouble() / MILLISECONDS_TO_SECONDS)
     }
+    Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs")
 
     addSubtitlesFromExtras(extras)
     setHttpHeadersFromExtras(extras)
+  }
+
+  /**
+   * Logs the full launch intent (action, data, type, and all extras) for debugging
+   * external launcher integration (e.g. Stremio sending a "position" extra).
+   *
+   * @param source Where the intent came from ("onCreate" or "onNewIntent")
+   * @param intent The incoming intent
+   */
+  private fun logIntentExtras(source: String, intent: Intent) {
+    Log.d(TAG, "$source intent: action=${intent.action} type=${intent.type} scheme=${intent.data?.scheme} host=${intent.data?.host}")
+    val extras = intent.extras
+    if (extras == null) {
+      Log.d(TAG, "$source intent: no extras")
+      return
+    }
+    Log.d(TAG, "$source intent extra keys: ${extras.keySet().sorted().joinToString()}")
   }
 
   /**
@@ -1206,20 +1247,110 @@ class PlayerActivity :
    * @param extras Bundle containing subtitle URIs
    */
   private fun addSubtitlesFromExtras(extras: Bundle) {
-    if (!extras.containsKey("subs")) return
+    val subUris = mutableListOf<Pair<Uri, Boolean>>()
 
-    val subList = Utils.getParcelableArray<Uri>(extras, "subs")
-    val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
+    if (extras.containsKey("subs")) {
+      val subList = Utils.getParcelableArray<Uri>(extras, "subs")
+      val subsToEnable = Utils.getParcelableArray<Uri>(extras, "subs.enable")
+      for (suburi in subList) {
+        subUris.add(suburi to subsToEnable.any { it == suburi })
+      }
+    }
+
+    val stremioSubUris = parseStremioSubtitleExtras(extras)
+    if (stremioSubUris.isNotEmpty()) {
+      // Only auto-select Stremio-provided subtitles when the file has no embedded subs,
+      // otherwise the embedded ones would be silently replaced by an inferior download.
+      val select = !hasEmbeddedSubtitles()
+      for (subUrl in stremioSubUris) {
+        subUris.add(Uri.parse(subUrl) to select)
+      }
+    }
+
+    if (subUris.isEmpty()) return
 
     lifecycleScope.launch(Dispatchers.Default) {
-      for (suburi in subList) {
+      for ((suburi, selectFlag) in subUris) {
         val subfile = suburi.resolveUri(this@PlayerActivity) ?: continue
-        val flag = if (subsToEnable.any { it == suburi }) "select" else "auto"
+        val flag = if (selectFlag) "select" else "auto"
 
         Log.v(TAG, "Adding subtitles from intent extras: $subfile")
         MPVLib.command("sub-add", subfile, flag)
       }
     }
+  }
+
+  /**
+   * Parses Stremio subtitle extras that some handoff builds may include.
+   *
+   * Stremio's subtitle support for external players is undocumented, so we accept
+   * several possible shapes defensively: a plain "subtitleUrl" string, a
+   * "subtitles" string containing a plain URL, a single JSON object with a "url"
+   * field, or a JSON array of such objects.
+   */
+  private fun parseStremioSubtitleExtras(extras: Bundle): List<String> {
+    val out = mutableListOf<String>()
+
+    extras.getString("subtitleUrl")?.takeIf { it.isNotBlank() }?.let { out.add(it) }
+
+    val subtitlesJson = extras.getString("subtitles")?.takeIf { it.isNotBlank() }
+    if (subtitlesJson != null) {
+      val trimmed = subtitlesJson.trim()
+      when {
+        trimmed.startsWith("[") -> {
+          try {
+            val arr = org.json.JSONArray(trimmed)
+            for (i in 0 until arr.length()) {
+              val obj = arr.optJSONObject(i)
+              val url = obj?.optString("url")?.takeIf { it.isNotBlank() }
+              if (url != null) out.add(url)
+            }
+          } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse subtitles JSON: $subtitlesJson", e)
+          }
+        }
+        trimmed.startsWith("{") -> {
+          try {
+            val obj = org.json.JSONObject(trimmed)
+            val url = obj.optString("url").takeIf { it.isNotBlank() }
+            if (url != null) out.add(url)
+          } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse subtitle JSON: $subtitlesJson", e)
+          }
+        }
+        else -> out.add(subtitlesJson)
+      }
+    }
+
+    return out
+  }
+
+  private fun hasEmbeddedSubtitles(): Boolean {
+    val count = runCatching { MPVLib.getPropertyInt("track-list/count") ?: 0 }.getOrDefault(0)
+    for (i in 0 until count) {
+      val type = runCatching { MPVLib.getPropertyString("track-list/$i/type") }.getOrNull() ?: continue
+      if (type == "sub") {
+        val external = runCatching { MPVLib.getPropertyBoolean("track-list/$i/external") }.getOrDefault(false)
+        if (external != true) return true
+      }
+    }
+    return false
+  }
+
+  private fun isStremioHandoff(intent: Intent): Boolean {
+    val uri = intent.data?.toString() ?: return false
+    if (!StreamTuning.isNetworkUri(uri)) return false
+    if (StreamTuning.isStremioTorrentUri(uri)) return true
+    return StremioHandoff.requestedResult(intent) ||
+      intent.hasExtra("subtitleUrl") || intent.hasExtra("subtitles")
+  }
+
+  private fun applyStreamTuning(uri: String?) {
+    StreamTuning.applyTuningForUri(
+      uri = uri,
+      maximumDownloadMiB = extraPreferences.maximumNetworkDownloadMiB.get(),
+      maximumBufferedSeconds = extraPreferences.maximumBufferedSeconds.get(),
+    )
   }
 
   /**
@@ -1290,7 +1421,7 @@ class PlayerActivity :
         .joinToString(",")
 
       safeSetPropertyString("http-header-fields", headersString)
-      Log.d(TAG, "Set HTTP headers: $headersString")
+      Log.d(TAG, "Set ${headerMap.size} HTTP header field(s)")
     } else {
       safeSetPropertyString("http-header-fields", "")
       Log.d(TAG, "Cleared HTTP headers")
@@ -1338,12 +1469,15 @@ class PlayerActivity :
    * @param intent The intent containing the file URI
    * @return The resolved file path, or null if not found
    */
-  private fun parsePathFromIntent(intent: Intent): String? =
-    when (intent.action) {
+  private fun parsePathFromIntent(intent: Intent): String? {
+    // Log the raw incoming URL (e.g. Stremio's local HTTP/P2P stream URL) for verification
+    Log.d(TAG, "Incoming intent action=${intent.action} data=${intent.data}")
+    return when (intent.action) {
       Intent.ACTION_VIEW -> intent.data?.resolveUri(this)
       Intent.ACTION_SEND -> parsePathFromSendIntent(intent)
       else -> intent.getStringExtra("uri")
     }
+  }
 
   /**
    * Parses the file path from a SEND intent.
@@ -1559,11 +1693,26 @@ class PlayerActivity :
       return
     }
 
+    // 2b. Network streams (e.g. Stremio external player) have no known dimensions
+    // yet, so default to landscape immediately in Video mode to avoid the portrait
+    // flash. The aspect-ratio observer corrects it once the video actually loads.
+    if (orient == PlayerOrientation.Video) {
+      val playableUri = getPlayableUri(targetIntent)
+      if (playableUri != null && StreamTuning.isNetworkUri(playableUri)) {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        Log.d(TAG, "applyInitialOrientationFromIntent - Video mode: provisional landscape for network stream")
+        return
+      }
+    }
+
     // 3. Fallback: try saved orientation from DB or metadata cache asynchronously
     val targetFileName = getFileName(targetIntent).ifBlank { targetIntent.data?.lastPathSegment ?: "Unknown Video" }
     lifecycleScope.launch(Dispatchers.IO) {
       if (orient == PlayerOrientation.Smart) {
-        val state = playbackStateRepository.getVideoDataByTitle(targetFileName)
+        val targetIdentifier = getMediaIdentifier(targetIntent, targetFileName)
+        val state = playbackStateRepository.getVideoDataByTitle(targetIdentifier)
+          ?: targetFileName.takeIf { it != targetIdentifier }
+            ?.let { playbackStateRepository.getVideoDataByTitle(it) }
         if (state?.savedOrientation != null && state.savedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
           withContext(Dispatchers.Main) {
             requestedOrientation = state.savedOrientation!!
@@ -1852,10 +2001,10 @@ class PlayerActivity :
       if (fileName.isBlank()) {
         fileName = intent.data?.lastPathSegment ?: "Unknown Video"
       }
-      mediaIdentifier = getMediaIdentifier(intent, fileName)
+      updateMediaIdentifiers(intent, fileName)
     } else if (mediaIdentifier.isBlank()) {
       // If fileName was already set, but mediaIdentifier is missing, set it for safety
-      mediaIdentifier = getMediaIdentifier(intent, fileName)
+      updateMediaIdentifiers(intent, fileName)
     }
 
     // Start media notification service only when going to background (like stock mpv-android)
@@ -1902,6 +2051,7 @@ class PlayerActivity :
     lifecycleScope.launch(Dispatchers.IO) {
       // Load playback state (will skip track restoration if preferred language configured)
       val hasState = loadVideoPlaybackState(fileName)
+      intentPositionMs = POSITION_NOT_SET.toLong()
 
       // Re-enable the video/album-art track when loading a file in the foreground.
       // onNewIntent loads new files with vid="no"; if we're not in background
@@ -1925,7 +2075,8 @@ class PlayerActivity :
       }
 
       // Apply track selection logic (defaults only apply when no saved state)
-      trackSelector.onFileLoaded(hasState)
+      trackSelector.onFileLoaded(hasState, loadedPlaybackState?.sid)
+      loadedPlaybackState = null
 
       // Apply default zoom only if there's no saved state
       if (!hasState) {
@@ -2274,12 +2425,13 @@ class PlayerActivity :
   /**
    * Saves the current playback state to the database.
    *
-   * Uses lifecycleScope to save state; cancels previous pending saves.
+   * Uses lifecycleScope to save state and serializes writes from lifecycle callbacks.
    *
    * @param mediaTitle The title of the media being played
    */
   private fun saveVideoPlaybackState(mediaTitle: String) {
     val identifier = mediaIdentifier
+    val legacyIdentifier = legacyMediaIdentifier
     if (identifier.isBlank()) return
 
     // Capture current playback state before switching files
@@ -2297,68 +2449,75 @@ class PlayerActivity :
     val currentExternalSubs = viewModel.externalSubtitles.toList()
     val currentExternalAudio = viewModel.externalAudioTracks.toList()
 
-    // Cancel any previous pending save operation
-    savePlaybackStateJob?.cancel()
+    val saveSequence = ++playbackStateSaveSequence
 
-    // Launch new save job and track it
+    // Serialize writes and reject stale snapshots so lifecycle callbacks cannot overwrite
+    // a newer position when their asynchronous jobs complete out of order.
     savePlaybackStateJob = lifecycleScope.launch(Dispatchers.IO) {
-      runCatching {
-        val oldState = playbackStateRepository.getVideoDataByTitle(identifier)
-        Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $identifier) at position: $currentPos")
+      playbackStateSaveMutex.withLock {
+        if (saveSequence < lastPersistedPlaybackStateSequence) return@withLock
+        runCatching {
+          val oldState = playbackStateRepository.getVideoDataByTitle(identifier)
+            ?: legacyIdentifier.takeIf { it.isNotBlank() && it != identifier }
+              ?.let { playbackStateRepository.getVideoDataByTitle(it) }
+          Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $identifier) at position: $currentPos (save #$saveSequence)")
 
-        val watchedThreshold = browserPreferences.watchedThreshold.get()
-        val progress = if (currentDuration > 0) currentPos.toFloat() / currentDuration.toFloat() else 0f
+          val watchedThreshold = browserPreferences.watchedThreshold.get()
+          val progress = if (currentDuration > 0) currentPos.toFloat() / currentDuration.toFloat() else 0f
 
-        // Calculate save position
-        val savePos = if (!playerPreferences.savePositionOnQuit.get()) {
-          oldState?.lastPosition ?: 0
-        } else {
-          // If we've reached the threshold or are within 1 second of the end, restart from beginning
-          // Only do this if we have a valid duration to avoid accidental "watched" status
-          if (currentDuration > 0) {
-            if (progress < (watchedThreshold / 100f) && currentPos < currentDuration - 1) {
-              currentPos
-            } else {
-              0
-            }
+          // Calculate save position
+          val savePos = if (!playerPreferences.savePositionOnQuit.get()) {
+            oldState?.lastPosition ?: 0
           } else {
-            // If duration is not yet available, preserve old position or use current (0)
-            oldState?.lastPosition ?: currentPos
+            // If we've reached the threshold or are within 1 second of the end, restart from beginning
+            // Only do this if we have a valid duration to avoid accidental "watched" status
+            if (currentDuration > 0) {
+              if (progress < (watchedThreshold / 100f) && currentPos < currentDuration - 1) {
+                currentPos
+              } else {
+                0
+              }
+            } else {
+              // If duration is not yet available, preserve old position or use current (0)
+              oldState?.lastPosition ?: currentPos
+            }
           }
+
+          val timeRemaining = if (currentDuration > savePos) currentDuration - savePos else 0
+
+          playbackStateRepository.upsert(
+            PlaybackStateEntity(
+              mediaTitle = identifier,
+              lastPosition = savePos,
+              playbackSpeed = currentSpeed,
+              videoZoom = currentZoom,
+              sid = currentSid,
+              secondarySid = currentSecondarySid,
+              subDelay = (currentSubDelay * MILLISECONDS_TO_SECONDS).toInt(),
+              subSpeed = currentSubSpeed,
+              aid = currentAid,
+              audioDelay = (currentAudioDelay * MILLISECONDS_TO_SECONDS).toInt(),
+              timeRemaining = timeRemaining,
+              savedOrientation = currentOrientation,
+              externalSubtitles = currentExternalSubs.joinToString("|"),
+              externalAudioTracks = currentExternalAudio.joinToString("|"),
+              hasBeenWatched = run {
+                // Check if we are at the end (effectively watched)
+                val isFinished = (currentDuration > 0) && (currentPos >= currentDuration - 1)
+                val isCurrentlyWatched = progress >= (watchedThreshold / 100f)
+
+                val oldProgress = if (currentDuration > 0) (oldState?.lastPosition?.toFloat() ?: 0f) / currentDuration.toFloat() else 0f
+                val wasWatchedThisSession = oldProgress >= (watchedThreshold / 100f)
+
+                isCurrentlyWatched || isFinished || wasWatchedThisSession || (oldState?.hasBeenWatched == true)
+              },
+            ),
+          )
+          lastPersistedPlaybackStateSequence = saveSequence
+          MediaFileRepository.clearCache()
+        }.onFailure { e ->
+          Log.e(TAG, "Error saving playback state", e)
         }
-
-        val timeRemaining = if (currentDuration > savePos) currentDuration - savePos else 0
-
-        playbackStateRepository.upsert(
-          PlaybackStateEntity(
-            mediaTitle = identifier,
-            lastPosition = savePos,
-            playbackSpeed = currentSpeed,
-            videoZoom = currentZoom,
-            sid = currentSid,
-            secondarySid = currentSecondarySid,
-            subDelay = (currentSubDelay * MILLISECONDS_TO_SECONDS).toInt(),
-            subSpeed = currentSubSpeed,
-            aid = currentAid,
-            audioDelay = (currentAudioDelay * MILLISECONDS_TO_SECONDS).toInt(),
-            timeRemaining = timeRemaining,
-            savedOrientation = currentOrientation,
-            externalSubtitles = currentExternalSubs.joinToString("|"),
-            externalAudioTracks = currentExternalAudio.joinToString("|"),
-            hasBeenWatched = run {
-              // Check if we are at the end (effectively watched)
-              val isFinished = (currentDuration > 0) && (currentPos >= currentDuration - 1)
-              val isCurrentlyWatched = progress >= (watchedThreshold / 100f)
-
-              val oldProgress = if (currentDuration > 0) (oldState?.lastPosition?.toFloat() ?: 0f) / currentDuration.toFloat() else 0f
-              val wasWatchedThisSession = oldProgress >= (watchedThreshold / 100f)
-
-              isCurrentlyWatched || isFinished || wasWatchedThisSession || (oldState?.hasBeenWatched == true)
-            },
-          ),
-        )
-      }.onFailure { e ->
-        Log.e(TAG, "Error saving playback state", e)
       }
     }
   }
@@ -2369,10 +2528,14 @@ class PlayerActivity :
    * @return true if saved state was found and applied, false otherwise
    */
   private suspend fun loadVideoPlaybackState(mediaTitle: String): Boolean {
+    loadedPlaybackState = null
     if (mediaIdentifier.isBlank()) return false
 
     return runCatching {
       val state = playbackStateRepository.getVideoDataByTitle(mediaIdentifier)
+        ?: legacyMediaIdentifier.takeIf { it.isNotBlank() && it != mediaIdentifier }
+          ?.let { playbackStateRepository.getVideoDataByTitle(it) }
+      loadedPlaybackState = state
 
       applyPlaybackState(state)
       applyDefaultSettings(state)
@@ -2394,7 +2557,9 @@ class PlayerActivity :
   private suspend fun applyPlaybackState(state: PlaybackStateEntity?) {
     if (state == null) {
       // Force reset position for new items in playlist
-      MPVLib.setPropertyInt("time-pos", 0)
+      if (intentPositionMs == POSITION_NOT_SET.toLong()) {
+        MPVLib.setPropertyInt("time-pos", 0)
+      }
       return
     }
 
@@ -2458,10 +2623,14 @@ class PlayerActivity :
     MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
     viewModel.setVideoZoom(state.videoZoom)
 
-    if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
-      MPVLib.setPropertyInt("time-pos", state.lastPosition)
+    if (intentPositionMs == POSITION_NOT_SET.toLong()) {
+      if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
+        MPVLib.setPropertyInt("time-pos", state.lastPosition)
+      } else {
+        MPVLib.setPropertyInt("time-pos", 0)
+      }
     } else {
-      MPVLib.setPropertyInt("time-pos", 0)
+      Log.d(TAG, "applyPlaybackState: honoring incoming position extra ${intentPositionMs}ms")
     }
   }
 
@@ -2491,15 +2660,18 @@ class PlayerActivity :
    * Called when activity is finishing to return data to caller.
    */
   private fun setReturnIntent() {
-    Log.d(TAG, "Setting return intent")
+    if (!shouldReturnStremioResult) return
 
-    val resultIntent =
-      Intent(RESULT_INTENT).apply {
-        viewModel.pos?.let { putExtra("position", it * MILLISECONDS_TO_SECONDS) }
-        viewModel.duration?.let { putExtra("duration", it * MILLISECONDS_TO_SECONDS) }
-      }
-
-    setResult(RESULT_OK, resultIntent)
+    val precisePosition = viewModel.precisePosition.value.toDouble()
+      .takeIf { it.isFinite() && it >= 0.0 && (it > 0.0 || viewModel.pos == 0) }
+    val preciseDuration = viewModel.preciseDuration.value.toDouble()
+      .takeIf { it.isFinite() && it > 0.0 }
+    val result = StremioHandoff.normalizeResult(
+      positionMs = StremioHandoff.millisecondsFromSeconds(precisePosition ?: viewModel.pos?.toDouble()),
+      durationMs = StremioHandoff.millisecondsFromSeconds(preciseDuration ?: viewModel.duration?.toDouble()),
+    )
+    Log.d(TAG, "Setting Stremio return intent: position=${result.positionMs}ms duration=${result.durationMs}ms")
+    setResult(RESULT_OK, StremioHandoff.resultIntent(result))
   }
 
   /**
@@ -2511,6 +2683,10 @@ class PlayerActivity :
     super.onNewIntent(intent)
 
     pendingIntentExtras = true
+    intentPositionMs = POSITION_NOT_SET.toLong()
+    shouldReturnStremioResult = StremioHandoff.requestedResult(intent)
+    logIntentExtras("onNewIntent", intent)
+    viewModel.markStremioHandoff(isStremioHandoff(intent))
     // Update the intent first so getFileName uses the new intent data
     setIntent(intent)
 
@@ -2526,6 +2702,8 @@ class PlayerActivity :
     if (isReady && (incomingUri == null || (isSameMedia && !isInBackgroundPlayback && !isManualBackgroundPlayback))) {
       Log.d(TAG, "onNewIntent: current media already playing or expanding active session, restoring player without reload")
       enableVideoAfterBackground()
+      if (incomingUri != null) setIntentExtras(intent.extras)
+      pendingIntentExtras = false
       @Suppress("DEPRECATION")
       overridePendingTransition(android.R.anim.fade_in, 0)
       return
@@ -2622,7 +2800,7 @@ class PlayerActivity :
     if (fileName.isBlank()) {
       fileName = intent.data?.lastPathSegment ?: "Unknown Video"
     }
-    mediaIdentifier = getMediaIdentifier(intent, fileName)
+    updateMediaIdentifiers(intent, fileName)
 
     // Synchronously set orientation for the new file before displaying activity
     applyInitialOrientationFromIntent(intent)
@@ -2632,12 +2810,13 @@ class PlayerActivity :
 
     // Load the new file
     getPlayableUri(intent)?.let { uriStr ->
+      viewModel.setAutoSubtitleSource(extractUriFromIntent(intent)?.toString())
       val parsedUri = runCatching { Uri.parse(uriStr) }.getOrNull()
       val fastDurationMs = if (parsedUri != null) getFastDurationMsForUri(parsedUri) else 0L
       val fastDurationSec = if (fastDurationMs > 0L) fastDurationMs / 1000f else null
       viewModel.prepareForFileLoad(fastDurationSec)
 
-      if (parsedUri != null && isUriM3U(parsedUri)) {
+      if (parsedUri != null && isM3uPlaylistUri(parsedUri)) {
         loadM3uPlaylistOrPlayDirectly(uriStr)
       } else {
         if (playerPreferences.savePositionOnQuit.get()) {
@@ -2645,6 +2824,7 @@ class PlayerActivity :
         }
         // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
         lifecycleScope.launch(Dispatchers.Default) {
+          applyStreamTuning(uriStr)
           MPVLib.command("loadfile", uriStr)
         }
       }
@@ -3571,6 +3751,7 @@ class PlayerActivity :
 
     val uri = playlist[index]
     val playableUri = uri.resolveUri(this) ?: uri.toString()
+    viewModel.setAutoSubtitleSource(uri.toString())
 
     // Update index in manager
     viewModel.playlistManager.updateIndex(index)
@@ -3579,7 +3760,7 @@ class PlayerActivity :
     val customTitle = viewModel.playlistManager.getTitleAt(index)
     fileName = if (!customTitle.isNullOrBlank()) customTitle else getFileNameFromUri(uri)
     // Generate new media identifier for playback state
-    mediaIdentifier = getMediaIdentifierFromUri(uri, fileName)
+    updateMediaIdentifiers(uri, fileName)
 
     val cachedDurationMs = viewModel.playlistManager.getDurationAt(index)
     val fastDurationMs = if (cachedDurationMs > 0L) cachedDurationMs else getFastDurationMsForUri(uri)
@@ -3653,6 +3834,7 @@ class PlayerActivity :
     // Load the new video
     // Avoid blocking UI thread while mpv opens network streams (e.g., HLS).
     lifecycleScope.launch(Dispatchers.Default) {
+      applyStreamTuning(playableUri)
       MPVLib.command("loadfile", playableUri)
     }
 
@@ -3791,6 +3973,13 @@ class PlayerActivity :
       lowerUrl.endsWith(".m3u8") || lowerUrl.endsWith(".m3u")
   }
 
+  /** HLS manifests must remain intact instead of being expanded as channel playlists. */
+  private fun isM3uPlaylistUri(uriStr: String): Boolean {
+    return isUriM3U(uriStr) && !StreamTuning.isAdaptiveManifestUri(uriStr)
+  }
+
+  private fun isM3uPlaylistUri(uri: Uri): Boolean = isM3uPlaylistUri(uri.toString())
+
   /**
    * Check if a specific URI is an m3u or m3u8 file/stream.
    */
@@ -3844,6 +4033,7 @@ class PlayerActivity :
           }
           if (mpvInitialized) {
             lifecycleScope.launch(Dispatchers.Default) {
+              applyStreamTuning(uriStr)
               MPVLib.command("loadfile", uriStr)
             }
           } else {
@@ -3872,7 +4062,7 @@ class PlayerActivity :
   /**
    * Generate a unique identifier for this media for playback state/history.
    *
-   * For local/offline files, uses fileName (display name or path).
+   * For local/offline files, uses the resolved path or original content URI.
    * For network streams via proxy (SMB/WebDAV/FTP), uses the stable network file path from intent extras.
    * For other network URIs (http/https/rtmp/etc.), uses a hash of the URI string to distinguish different streams.
    */
@@ -3893,27 +4083,54 @@ class PlayerActivity :
     }
 
     val uri = extractUriFromIntent(intent)
-    return if (uri != null && (uri.scheme?.startsWith("http") == true || uri.scheme == "rtmp" || uri.scheme == "ftp" || uri.scheme == "rtsp" || uri.scheme == "mms")) {
+    return if (uri != null && StreamTuning.isNetworkUri(uri.toString())) {
       // For remote protocols: hash the URI so position is per-episode or per-stream.
       "${fileName}_${uri.toString().hashCode()}"
     } else {
-      // For local/file uris and unknown: just use fileName.
-      fileName
+      when (uri?.scheme) {
+        "content" -> getStableLocalMediaIdentifier(uri)
+        "file" -> uri.path?.let { path -> runCatching { File(path).canonicalPath }.getOrDefault(path) } ?: uri.toString()
+        else -> parsePathFromIntent(intent) ?: uri?.toString() ?: fileName
+      }
     }
   }
 
   /**
    * Generate a unique identifier for this media from a URI and name.
    *
-   * For local/offline files, uses fileName (display name or path).
+   * For local/offline files, uses the resolved path or original content URI.
    * For network URIs (http/https/rtmp/etc.), uses a hash of the URI string to distinguish different streams.
    */
   private fun getMediaIdentifierFromUri(uri: Uri, fileName: String): String {
-    return if (uri.scheme?.startsWith("http") == true || uri.scheme == "rtmp" || uri.scheme == "ftp" || uri.scheme == "rtsp" || uri.scheme == "mms") {
+    return if (StreamTuning.isNetworkUri(uri.toString())) {
       "${fileName}_${uri.toString().hashCode()}"
     } else {
-      fileName
+      when (uri.scheme) {
+        "content" -> getStableLocalMediaIdentifier(uri)
+        "file" -> uri.path?.let { path -> runCatching { File(path).canonicalPath }.getOrDefault(path) } ?: uri.toString()
+        else -> uri.toString()
+      }
     }
+  }
+
+  private fun updateMediaIdentifiers(intent: Intent, fileName: String) {
+    mediaIdentifier = getMediaIdentifier(intent, fileName)
+    legacyMediaIdentifier = fileName
+  }
+
+  private fun updateMediaIdentifiers(uri: Uri, fileName: String) {
+    mediaIdentifier = getMediaIdentifierFromUri(uri, fileName)
+    legacyMediaIdentifier = fileName
+  }
+
+  private fun getStableLocalMediaIdentifier(uri: Uri): String {
+    val path = runCatching {
+      contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+        val column = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+        if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+      }
+    }.getOrNull()
+    return path?.let { runCatching { File(it).canonicalPath }.getOrDefault(it) } ?: uri.toString()
   }
 
   private fun generatePlaylistFromMediaLibrary(currentPath: String) {
@@ -3973,11 +4190,6 @@ class PlayerActivity :
 
   companion object {
     /**
-     * Intent action used to return playback result data to the calling activity.
-     */
-    private const val RESULT_INTENT = "xyz.mpv.rex.ui.player.PlayerActivity.result"
-
-    /**
      * Constant for "brightness not set".
      */
     private const val BRIGHTNESS_NOT_SET = -1f
@@ -3985,7 +4197,7 @@ class PlayerActivity :
     /**
      * Constant used when playback position is not set.
      */
-    private const val POSITION_NOT_SET = 0
+    private const val POSITION_NOT_SET = -1
 
     /**
      * Maximum volume for MPV in percent.

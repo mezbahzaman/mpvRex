@@ -66,6 +66,7 @@ object CoreMediaScanner {
      */
     private data class ScannedItem(
         val name: String,
+        val location: String,
         val size: Long,
         val duration: Long,
         val dateModified: Long,
@@ -333,7 +334,8 @@ object CoreMediaScanner {
                     }
 
                     // Calculate unwatched status for all media (audio and video)
-                    val playbackState = playbackStates.find { it.mediaTitle == item.name }
+                    val playbackState = playbackStates.find { it.mediaTitle == item.location }
+                        ?: playbackStates.find { it.mediaTitle == item.name }
                     var isWatched = false
                     
                     if (playbackState != null) {
@@ -422,6 +424,7 @@ object CoreMediaScanner {
                     rawMedia.getOrPut(folderPath) { mutableListOf() }.add(
                         ScannedItem(
                             name = cursor.getString(nameIdx) ?: file.name,
+                            location = runCatching { file.canonicalPath }.getOrElse { file.absoluteFile.normalize().path },
                             size = cursor.getLong(sizeIdx),
                             duration = cursor.getLong(durationIdx),
                             dateModified = cursor.getLong(dateIdx),
@@ -472,6 +475,7 @@ object CoreMediaScanner {
                     itemsInFolder.add(
                         ScannedItem(
                             name = file.name,
+                            location = runCatching { file.canonicalPath }.getOrElse { file.absoluteFile.normalize().path },
                             size = file.length(),
                             duration = 0, // Filesystem doesn't give duration
                             dateModified = file.lastModified() / 1000,
