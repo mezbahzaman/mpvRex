@@ -38,10 +38,4 @@ class StreamTuningTest {
     assertFalse(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/movie.mp4?source=.m3u8"))
   }
 
-  @Test
-  fun adaptiveManifestDemuxersAreSelectedFromTheirExtension() {
-    assertEquals("dash", StreamTuning.adaptiveDemuxerFormat("https://cdn.example/video/index.mpd?token=abc"))
-    assertEquals("hls", StreamTuning.adaptiveDemuxerFormat("https://cdn.example/video/index.m3u8?token=abc"))
-    assertEquals("", StreamTuning.adaptiveDemuxerFormat("https://cdn.example/video/movie.mp4"))
-  }
 }

@@ -1,6 +1,5 @@
 package xyz.mpv.rex.ui.player.controls.components.panels
 
-import android.annotation.SuppressLint
 import androidx.annotation.StringRes
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +50,7 @@ import xyz.mpv.rex.presentation.components.SliderItem
 import xyz.mpv.rex.ui.player.controls.CARDS_MAX_WIDTH
 import xyz.mpv.rex.ui.player.controls.panelCardsColors
 import xyz.mpv.rex.ui.theme.spacing
+import xyz.mpv.rex.utils.media.copyBundledSubtitleFonts
 import com.github.k1rakishou.fsaf.FileManager
 import com.yubyf.truetypeparser.TTFFile
 import `is`.xyz.mpv.MPVLib
@@ -63,14 +63,13 @@ import me.zhanghai.compose.preference.ProvidePreferenceLocals
 import me.zhanghai.compose.preference.preferenceTheme
 import org.koin.compose.koinInject
 
-@SuppressLint("MutableCollectionMutableState")
 @Composable
 fun SubtitleSettingsTypographyCard(modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val preferences = koinInject<SubtitlesPreferences>()
   val fileManager = koinInject<FileManager>()
   var isExpanded by remember { mutableStateOf(true) }
-  val fonts by remember { mutableStateOf(mutableListOf<String>("Default")) }
+  var fonts by remember { mutableStateOf(listOf("Default")) }
   var fontsLoadingIndicator: (@Composable () -> Unit)? by remember {
     val indicator: (@Composable () -> Unit) = {
       CircularProgressIndicator(Modifier.size(32.dp))
@@ -79,9 +78,10 @@ fun SubtitleSettingsTypographyCard(modifier: Modifier = Modifier) {
   }
   LaunchedEffect(Unit) {
     withContext(Dispatchers.IO) {
+      copyBundledSubtitleFonts(context)
       val fontsDir = fileManager.fromPath(context.filesDir.path + "/fonts")
-      if (fileManager.exists(fontsDir)) {
-        fonts.addAll(
+      val discoveredFonts =
+        if (fileManager.exists(fontsDir)) {
           fileManager
             .listFiles(fontsDir)
             .filter { fileManager.isFile(it) && fileManager.getName(it).lowercase().matches(".*\\.[ot]tf$".toRegex()) }
@@ -90,9 +90,13 @@ fun SubtitleSettingsTypographyCard(modifier: Modifier = Modifier) {
                 TTFFile.open(fileManager.getInputStream(it) ?: return@mapNotNull null).families.values.first()
               }.getOrNull()
             }.distinct()
-        )
+        } else {
+          emptyList()
+        }
+      withContext(Dispatchers.Main) {
+        fonts = listOf("Default") + discoveredFonts
+        fontsLoadingIndicator = null
       }
-      fontsLoadingIndicator = null
     }
   }
 
