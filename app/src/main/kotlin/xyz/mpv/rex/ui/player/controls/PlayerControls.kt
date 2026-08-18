@@ -999,7 +999,26 @@ fun PlayerControls(
                 LoadingIndicator(
                   modifier = Modifier.size(96.dp),
                 )
-                val bufferingPercent = cacheBufferingState
+                val bufferingPercent =
+                  cacheBufferingState
+                    ?.takeIf { it in 0..100 }
+                    ?: run {
+                      val totalDuration =
+                        if (preciseDuration > 0f) preciseDuration else duration?.toFloat() ?: 0f
+                      val currentPosition =
+                        precisePosition.takeIf { it.isFinite() && it >= 0f }
+                          ?: position?.toFloat()?.coerceAtLeast(0f)
+                          ?: 0f
+                      val bufferedUntil =
+                        demuxerCacheEnd?.takeIf { it.isFinite() && it >= currentPosition }
+                          ?: demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPosition }
+                          ?: demuxerCacheDuration?.let { currentPosition + it }
+                      if (totalDuration > 0f && bufferedUntil != null) {
+                        ((bufferedUntil / totalDuration) * 100f).toInt().coerceIn(0, 100)
+                      } else {
+                        null
+                      }
+                    }
                 if (bufferingPercent != null && bufferingPercent in 0..100) {
                   Box(
                     modifier = Modifier.width(112.dp),

@@ -16,6 +16,8 @@ private val bundledSubtitleFontAssets =
     "bundled_fonts/roboto/Roboto-Variable.ttf",
     "bundled_fonts/lato/Lato-Regular.ttf",
     "bundled_fonts/noto_sans/NotoSans-Variable.ttf",
+    "bundled_fonts/product_sans/ProductSans-Regular.ttf",
+    "bundled_fonts/product_sans/ProductSans-Medium.ttf",
   )
 
 /** Adds bundled fonts to the user-visible font directory without replacing user files. */

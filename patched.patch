@@ -371,16 +371,26 @@ index 8d59a79..4424124 100644
 +Stremio-specific patches on top.
 diff --git a/RELEASE_NOTES.md b/RELEASE_NOTES.md
 new file mode 100644
-index 0000000..aee5e74
+index 0000000..e512dea
 --- /dev/null
 +++ b/RELEASE_NOTES.md
-@@ -0,0 +1,197 @@
-+# mpvRex Stremio Edition 4.5.7
+@@ -0,0 +1,208 @@
++# mpvRex Stremio Edition 4.5.8
 +
 +mpvRex Stremio Edition is a specialized build of
 +[mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
 +external player with Stremio. It retains the complete mpvRex playback experience
 +and can also be used as a regular Android video player.
++
++## Fixes in 4.5.8
++
++- DASH `.mpd` manifests are explicitly opened with FFmpeg's DASH demuxer, allowing
++  playback when a source proxy returns valid manifest XML as
++  `application/octet-stream`.
++- Buffering percentages fall back to MPV's actual cached endpoint when MPV does not
++  provide a valid `cache-buffering-state` value.
++- Product Sans Regular and Medium are bundled and available in the subtitle font
++  selector alongside the existing bundled fonts.
 +
 +## Fixes in 4.5.7
 +
@@ -555,7 +565,8 @@ index 0000000..aee5e74
 +
 +## Subtitle fonts
 +
-+- Roboto, Lato, and Noto Sans are bundled as ready-to-use subtitle font families.
++- Roboto, Lato, Noto Sans, and Product Sans are bundled as ready-to-use subtitle
++  font families.
 +- Existing custom font-folder support remains available, and user-provided font
 +  files are never overwritten by bundled fonts.
 +
@@ -573,7 +584,7 @@ index 0000000..aee5e74
 +All signed APKs and checksum files are available from the
 +[GitHub Releases page](https://github.com/mezbahzaman/mpvRex/releases).
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b937ac6..731d4e7 100644
+index b937ac6..67b2e93 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -17,8 +17,8 @@ android {
@@ -582,8 +593,8 @@ index b937ac6..731d4e7 100644
      targetSdk = 36
 -    versionCode = 210
 -    versionName = "4.5.0"
-+    versionCode = 230
-+    versionName = "4.5.7"
++    versionCode = 231
++    versionName = "4.5.8"
  
      vectorDrawables {
        useSupportLibrary = true
@@ -39015,7 +39026,7 @@ index 7a195af..7c138d3 100644
  }
 -
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
-index 46fe72b..81f71cf 100644
+index 46fe72b..31635f6 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/ui/player/controls/PlayerControls.kt
 @@ -103,6 +103,8 @@ import androidx.constraintlayout.compose.Dimension
@@ -39081,7 +39092,7 @@ index 46fe72b..81f71cf 100644
          val seekbar = createRef()
          val (playerUpdates, playerLockHint) = createRefs()
          val (customLeftButtonsRef, customRightButtonsRef) = createRefs()
-@@ -970,9 +992,31 @@ fun PlayerControls(
+@@ -970,9 +992,50 @@ fun PlayerControls(
  
            when {
              pausedForCache == true && showLoadingCircle -> {
@@ -39095,7 +39106,26 @@ index 46fe72b..81f71cf 100644
 +                LoadingIndicator(
 +                  modifier = Modifier.size(96.dp),
 +                )
-+                val bufferingPercent = cacheBufferingState
++                val bufferingPercent =
++                  cacheBufferingState
++                    ?.takeIf { it in 0..100 }
++                    ?: run {
++                      val totalDuration =
++                        if (preciseDuration > 0f) preciseDuration else duration?.toFloat() ?: 0f
++                      val currentPosition =
++                        precisePosition.takeIf { it.isFinite() && it >= 0f }
++                          ?: position?.toFloat()?.coerceAtLeast(0f)
++                          ?: 0f
++                      val bufferedUntil =
++                        demuxerCacheEnd?.takeIf { it.isFinite() && it >= currentPosition }
++                          ?: demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPosition }
++                          ?: demuxerCacheDuration?.let { currentPosition + it }
++                      if (totalDuration > 0f && bufferedUntil != null) {
++                        ((bufferedUntil / totalDuration) * 100f).toInt().coerceIn(0, 100)
++                      } else {
++                        null
++                      }
++                    }
 +                if (bufferingPercent != null && bufferingPercent in 0..100) {
 +                  Box(
 +                    modifier = Modifier.width(112.dp),
@@ -39116,7 +39146,7 @@ index 46fe72b..81f71cf 100644
              }
  
              controlsShown && !areControlsLocked -> {
-@@ -1158,6 +1202,22 @@ fun PlayerControls(
+@@ -1158,6 +1221,22 @@ fun PlayerControls(
            }
          }
  
@@ -39139,7 +39169,7 @@ index 46fe72b..81f71cf 100644
          AnimatedVisibility(
            visible = (controlsShown || seekBarShown) && !areControlsLocked,
            enter =
-@@ -1212,25 +1272,22 @@ fun PlayerControls(
+@@ -1212,25 +1291,22 @@ fun PlayerControls(
  
            // Calculate read-ahead position (current position + buffered cache time)
            // No keys for remember, derivedStateOf reactively tracks read dependencies
@@ -39181,7 +39211,7 @@ index 46fe72b..81f71cf 100644
            }
  
            SeekbarWithTimers(
-@@ -1258,14 +1315,21 @@ fun PlayerControls(
+@@ -1258,14 +1334,21 @@ fun PlayerControls(
                    viewModel.playerUpdate.value = PlayerUpdates.None
                  }
                }
@@ -39204,7 +39234,7 @@ index 46fe72b..81f71cf 100644
                isSeeking = false
                dragStartValue = -1f
                isCloseToStart = false
-@@ -1884,3 +1948,64 @@ fun PlayerControls(
+@@ -1884,3 +1967,64 @@ fun PlayerControls(
    }
  }
  
@@ -39845,10 +39875,10 @@ index 8284ff2..cb7d6f1 100644
      val preferences = koinInject<SubtitlesPreferences>()
      val fileManager = koinInject<FileManager>()
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/FontPreferencesUtils.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/FontPreferencesUtils.kt
-index d61256d..5bc099a 100644
+index d61256d..93766c5 100644
 --- a/app/src/main/kotlin/xyz/mpv/rex/utils/media/FontPreferencesUtils.kt
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/FontPreferencesUtils.kt
-@@ -11,6 +11,35 @@ import kotlinx.coroutines.withContext
+@@ -11,6 +11,37 @@ import kotlinx.coroutines.withContext
  import java.io.File
  import java.util.Locale
  
@@ -39857,6 +39887,8 @@ index d61256d..5bc099a 100644
 +    "bundled_fonts/roboto/Roboto-Variable.ttf",
 +    "bundled_fonts/lato/Lato-Regular.ttf",
 +    "bundled_fonts/noto_sans/NotoSans-Variable.ttf",
++    "bundled_fonts/product_sans/ProductSans-Regular.ttf",
++    "bundled_fonts/product_sans/ProductSans-Medium.ttf",
 +  )
 +
 +/** Adds bundled fonts to the user-visible font directory without replacing user files. */
@@ -40298,10 +40330,10 @@ index 0000000..6f95c08
 +}
 diff --git a/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
 new file mode 100644
-index 0000000..ae9a375
+index 0000000..0a5ef07
 --- /dev/null
 +++ b/app/src/main/kotlin/xyz/mpv/rex/utils/media/StreamTuning.kt
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,102 @@
 +package xyz.mpv.rex.utils.media
 +
 +import android.net.Uri
@@ -40338,6 +40370,15 @@ index 0000000..ae9a375
 +    return path.endsWith(".m3u8") || path.endsWith(".mpd")
 +  }
 +
++  internal fun adaptiveDemuxerFormat(uri: String): String {
++    val path = uri.substringBefore('?').lowercase()
++    return when {
++      path.endsWith(".mpd") -> "dash"
++      path.endsWith(".m3u8") -> "hls"
++      else -> ""
++    }
++  }
++
 +  fun isStremioTorrentUri(uri: String): Boolean {
 +    if (!isNetworkUri(uri)) return false
 +    val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return false
@@ -40361,6 +40402,7 @@ index 0000000..ae9a375
 +    maximumBufferedSeconds: Int = 180,
 +  ) {
 +    if (uri.isNullOrBlank()) return
++    MPVLib.setOptionString("demuxer-lavf-format", adaptiveDemuxerFormat(uri))
 +    val cacheLimits = cacheLimits(maximumDownloadMiB, maximumBufferedSeconds)
 +    when {
 +      isStremioTorrentUri(uri) -> {
@@ -40745,10 +40787,10 @@ index 0000000..aeafaaf
 +}
 diff --git a/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamTuningTest.kt b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamTuningTest.kt
 new file mode 100644
-index 0000000..16d32ce
+index 0000000..7347c4f
 --- /dev/null
 +++ b/app/src/test/kotlin/xyz/mpv/rex/utils/media/StreamTuningTest.kt
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,47 @@
 +package xyz.mpv.rex.utils.media
 +
 +import org.junit.Assert.assertEquals
@@ -40787,6 +40829,13 @@ index 0000000..16d32ce
 +    assertTrue(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/index.m3u8?token=abc"))
 +    assertTrue(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/manifest.mpd"))
 +    assertFalse(StreamTuning.isAdaptiveManifestUri("https://cdn.example/video/movie.mp4?source=.m3u8"))
++  }
++
++  @Test
++  fun adaptiveManifestDemuxersAreSelectedFromTheirExtension() {
++    assertEquals("dash", StreamTuning.adaptiveDemuxerFormat("https://cdn.example/video/index.mpd?token=abc"))
++    assertEquals("hls", StreamTuning.adaptiveDemuxerFormat("https://cdn.example/video/index.m3u8?token=abc"))
++    assertEquals("", StreamTuning.adaptiveDemuxerFormat("https://cdn.example/video/movie.mp4"))
 +  }
 +}
 diff --git a/docs/images/honest-buffering-percentage.jpg b/docs/images/honest-buffering-percentage.jpg

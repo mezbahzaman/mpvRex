@@ -1,9 +1,19 @@
-# mpvRex Stremio Edition 4.5.7
+# mpvRex Stremio Edition 4.5.8
 
 mpvRex Stremio Edition is a specialized build of
 [mpvRex](https://github.com/sfsakhawat999/mpvRex) for viewers who prefer to use an
 external player with Stremio. It retains the complete mpvRex playback experience
 and can also be used as a regular Android video player.
+
+## Fixes in 4.5.8
+
+- DASH `.mpd` manifests are explicitly opened with FFmpeg's DASH demuxer, allowing
+  playback when a source proxy returns valid manifest XML as
+  `application/octet-stream`.
+- Buffering percentages fall back to MPV's actual cached endpoint when MPV does not
+  provide a valid `cache-buffering-state` value.
+- Product Sans Regular and Medium are bundled and available in the subtitle font
+  selector alongside the existing bundled fonts.
 
 ## Fixes in 4.5.7
 
@@ -178,7 +188,8 @@ information refresh interval, and ping host.
 
 ## Subtitle fonts
 
-- Roboto, Lato, and Noto Sans are bundled as ready-to-use subtitle font families.
+- Roboto, Lato, Noto Sans, and Product Sans are bundled as ready-to-use subtitle
+  font families.
 - Existing custom font-folder support remains available, and user-provided font
   files are never overwritten by bundled fonts.
 

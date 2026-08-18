@@ -34,6 +34,15 @@ object StreamTuning {
     return path.endsWith(".m3u8") || path.endsWith(".mpd")
   }
 
+  internal fun adaptiveDemuxerFormat(uri: String): String {
+    val path = uri.substringBefore('?').lowercase()
+    return when {
+      path.endsWith(".mpd") -> "dash"
+      path.endsWith(".m3u8") -> "hls"
+      else -> ""
+    }
+  }
+
   fun isStremioTorrentUri(uri: String): Boolean {
     if (!isNetworkUri(uri)) return false
     val parsed = runCatching { Uri.parse(uri) }.getOrNull() ?: return false
@@ -57,6 +66,7 @@ object StreamTuning {
     maximumBufferedSeconds: Int = 180,
   ) {
     if (uri.isNullOrBlank()) return
+    MPVLib.setOptionString("demuxer-lavf-format", adaptiveDemuxerFormat(uri))
     val cacheLimits = cacheLimits(maximumDownloadMiB, maximumBufferedSeconds)
     when {
       isStremioTorrentUri(uri) -> {
