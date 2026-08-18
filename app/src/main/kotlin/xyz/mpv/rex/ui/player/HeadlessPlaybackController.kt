@@ -14,9 +14,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.mpv.rex.R
 import xyz.mpv.rex.preferences.PlayerPreferences
+import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
 import xyz.mpv.rex.utils.history.RecentlyPlayedOps
 import xyz.mpv.rex.utils.media.MediaThumbnailUtils
+import xyz.mpv.rex.utils.media.StreamTuning
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import org.koin.core.component.KoinComponent
@@ -44,6 +46,7 @@ import java.io.File
 class HeadlessPlaybackController(private val appContext: Context) : KoinComponent {
   private val miniPlayerStateManager: MiniPlayerStateManager by inject()
   private val playerPreferences: PlayerPreferences by inject()
+  private val extraPreferences: ExtraPreferences by inject()
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -285,6 +288,11 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
     activeTitle = title
 
     val playable = uri.resolveUri(appContext) ?: uri.toString()
+    StreamTuning.applyTuningForUri(
+      playable,
+      extraPreferences.maximumNetworkDownloadMiB.get(),
+      extraPreferences.maximumBufferedSeconds.get(),
+    )
     runCatching { MPVLib.command("loadfile", playable) }
     runCatching { MPVLib.setPropertyBoolean("pause", false) }
 
