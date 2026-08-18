@@ -187,7 +187,11 @@ class VideoListViewModel(
 
     val videosWithInfo =
       videos.map { video ->
-        val playbackState = playbackStates.find { it.mediaTitle == video.displayName }
+        val playbackState = playbackStateForVideo(
+          playbackStates = playbackStates,
+          path = video.path.ifBlank { video.uri.toString() },
+          displayName = video.displayName,
+        )
 
         // Map saved orientation to video
         val videoWithOrientation = if (playbackState?.savedOrientation != null) {
@@ -246,4 +250,19 @@ class VideoListViewModel(
       override fun <T : ViewModel> create(modelClass: Class<T>): T = VideoListViewModel(application, bucketId) as T
     }
   }
+}
+
+internal fun playbackStateForVideo(
+  playbackStates: List<xyz.mpv.rex.database.entities.PlaybackStateEntity>,
+  path: String,
+  displayName: String,
+): xyz.mpv.rex.database.entities.PlaybackStateEntity? {
+  val canonicalPath = if (path.startsWith("/")) {
+    runCatching { File(path).canonicalPath }.getOrDefault(path)
+  } else {
+    path
+  }
+  return playbackStates.firstOrNull { it.mediaTitle == canonicalPath }
+    ?: playbackStates.firstOrNull { it.mediaTitle == path }
+    ?: playbackStates.firstOrNull { it.mediaTitle == displayName }
 }

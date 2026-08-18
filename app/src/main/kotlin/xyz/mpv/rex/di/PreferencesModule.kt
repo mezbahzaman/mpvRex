@@ -7,6 +7,7 @@ import xyz.mpv.rex.preferences.AudioPreferences
 import xyz.mpv.rex.preferences.BrowserPreferences
 import xyz.mpv.rex.preferences.DecoderPreferences
 import xyz.mpv.rex.preferences.FoldersPreferences
+import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.preferences.GesturePreferences
 import xyz.mpv.rex.preferences.PlayerPreferences
 import xyz.mpv.rex.preferences.SettingsManager
@@ -28,6 +29,7 @@ val PreferencesModule =
     singleOf(::PlayerPreferences)
     singleOf(::GesturePreferences)
     singleOf(::DecoderPreferences)
+    singleOf(::ExtraPreferences)
     singleOf(::SubtitlesPreferences)
     singleOf(::AudioPreferences)
     singleOf(::AdvancedPreferences)
