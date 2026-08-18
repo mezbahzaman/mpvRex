@@ -76,6 +76,8 @@ import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import `is`.xyz.mpv.Utils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -237,8 +239,12 @@ class PlayerActivity :
   private var noisyReceiverRegistered = false
   private var mpvInitialized = false // Track MPV initialization state
   private var savePlaybackStateJob: kotlinx.coroutines.Job? = null // Track ongoing save job
+  private val playbackStateSaveMutex = Mutex()
+  private var playbackStateSaveSequence = 0L
+  private var lastPersistedPlaybackStateSequence = 0L
   private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
-  private var intentPositionMs = POSITION_NOT_SET // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
+  private var intentPositionMs = POSITION_NOT_SET.toLong() // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
+  private var shouldReturnStremioResult = false
   private var loadedPlaybackState: PlaybackStateEntity? = null
   private var lastVid = -1 // Track video track for background playback optimization
   private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
@@ -355,7 +361,8 @@ class PlayerActivity :
     setContentView(binding.root)
 
     pendingIntentExtras = true
-    intentPositionMs = POSITION_NOT_SET
+    intentPositionMs = POSITION_NOT_SET.toLong()
+    shouldReturnStremioResult = StremioHandoff.requestedResult(intent)
     logIntentExtras("onCreate", intent)
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
@@ -1193,7 +1200,7 @@ class PlayerActivity :
    * Processes intent extras to set initial playback position, subtitles, and HTTP headers.
    *
    * This method checks the intent extras for the following keys:
-   * - "position": The initial playback position in seconds.
+   * - "position": The initial playback position in milliseconds.
    * - "subs": A list of subtitle URIs to add.
    * - "subs.enable": A list of subtitle URIs to enable.
    * - "headers": A list of HTTP headers to set for network playback.
@@ -1203,11 +1210,11 @@ class PlayerActivity :
   private fun setIntentExtras(extras: Bundle?) {
     if (extras == null) return
 
-    extras.getInt("position", POSITION_NOT_SET).takeIf { extras.containsKey("position") && it >= 0 }?.let {
+    StremioHandoff.positionMs(extras)?.let {
       intentPositionMs = it
-      MPVLib.setPropertyInt("time-pos", it / MILLISECONDS_TO_SECONDS)
+      MPVLib.setPropertyDouble("time-pos", intentPositionMs.toDouble() / MILLISECONDS_TO_SECONDS)
     }
-    Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs (requested=${extras.getInt("position", POSITION_NOT_SET)})")
+    Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs")
 
     addSubtitlesFromExtras(extras)
     setHttpHeadersFromExtras(extras)
@@ -1334,7 +1341,7 @@ class PlayerActivity :
     val uri = intent.data?.toString() ?: return false
     if (!StreamTuning.isNetworkUri(uri)) return false
     if (StreamTuning.isStremioTorrentUri(uri)) return true
-    return intent.getBooleanExtra("return_result", false) ||
+    return StremioHandoff.requestedResult(intent) ||
       intent.hasExtra("subtitleUrl") || intent.hasExtra("subtitles")
   }
 
@@ -2044,7 +2051,7 @@ class PlayerActivity :
     lifecycleScope.launch(Dispatchers.IO) {
       // Load playback state (will skip track restoration if preferred language configured)
       val hasState = loadVideoPlaybackState(fileName)
-      intentPositionMs = POSITION_NOT_SET
+      intentPositionMs = POSITION_NOT_SET.toLong()
 
       // Re-enable the video/album-art track when loading a file in the foreground.
       // onNewIntent loads new files with vid="no"; if we're not in background
@@ -2418,7 +2425,7 @@ class PlayerActivity :
   /**
    * Saves the current playback state to the database.
    *
-   * Uses lifecycleScope to save state; cancels previous pending saves.
+   * Uses lifecycleScope to save state and serializes writes from lifecycle callbacks.
    *
    * @param mediaTitle The title of the media being played
    */
@@ -2442,71 +2449,75 @@ class PlayerActivity :
     val currentExternalSubs = viewModel.externalSubtitles.toList()
     val currentExternalAudio = viewModel.externalAudioTracks.toList()
 
-    // Cancel any previous pending save operation
-    savePlaybackStateJob?.cancel()
+    val saveSequence = ++playbackStateSaveSequence
 
-    // Launch new save job and track it
+    // Serialize writes and reject stale snapshots so lifecycle callbacks cannot overwrite
+    // a newer position when their asynchronous jobs complete out of order.
     savePlaybackStateJob = lifecycleScope.launch(Dispatchers.IO) {
-      runCatching {
-        val oldState = playbackStateRepository.getVideoDataByTitle(identifier)
-          ?: legacyIdentifier.takeIf { it.isNotBlank() && it != identifier }
-            ?.let { playbackStateRepository.getVideoDataByTitle(it) }
-        Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $identifier) at position: $currentPos")
+      playbackStateSaveMutex.withLock {
+        if (saveSequence < lastPersistedPlaybackStateSequence) return@withLock
+        runCatching {
+          val oldState = playbackStateRepository.getVideoDataByTitle(identifier)
+            ?: legacyIdentifier.takeIf { it.isNotBlank() && it != identifier }
+              ?.let { playbackStateRepository.getVideoDataByTitle(it) }
+          Log.d(TAG, "Saving playback state for: $mediaTitle (identifier: $identifier) at position: $currentPos (save #$saveSequence)")
 
-        val watchedThreshold = browserPreferences.watchedThreshold.get()
-        val progress = if (currentDuration > 0) currentPos.toFloat() / currentDuration.toFloat() else 0f
+          val watchedThreshold = browserPreferences.watchedThreshold.get()
+          val progress = if (currentDuration > 0) currentPos.toFloat() / currentDuration.toFloat() else 0f
 
-        // Calculate save position
-        val savePos = if (!playerPreferences.savePositionOnQuit.get()) {
-          oldState?.lastPosition ?: 0
-        } else {
-          // If we've reached the threshold or are within 1 second of the end, restart from beginning
-          // Only do this if we have a valid duration to avoid accidental "watched" status
-          if (currentDuration > 0) {
-            if (progress < (watchedThreshold / 100f) && currentPos < currentDuration - 1) {
-              currentPos
-            } else {
-              0
-            }
+          // Calculate save position
+          val savePos = if (!playerPreferences.savePositionOnQuit.get()) {
+            oldState?.lastPosition ?: 0
           } else {
-            // If duration is not yet available, preserve old position or use current (0)
-            oldState?.lastPosition ?: currentPos
+            // If we've reached the threshold or are within 1 second of the end, restart from beginning
+            // Only do this if we have a valid duration to avoid accidental "watched" status
+            if (currentDuration > 0) {
+              if (progress < (watchedThreshold / 100f) && currentPos < currentDuration - 1) {
+                currentPos
+              } else {
+                0
+              }
+            } else {
+              // If duration is not yet available, preserve old position or use current (0)
+              oldState?.lastPosition ?: currentPos
+            }
           }
+
+          val timeRemaining = if (currentDuration > savePos) currentDuration - savePos else 0
+
+          playbackStateRepository.upsert(
+            PlaybackStateEntity(
+              mediaTitle = identifier,
+              lastPosition = savePos,
+              playbackSpeed = currentSpeed,
+              videoZoom = currentZoom,
+              sid = currentSid,
+              secondarySid = currentSecondarySid,
+              subDelay = (currentSubDelay * MILLISECONDS_TO_SECONDS).toInt(),
+              subSpeed = currentSubSpeed,
+              aid = currentAid,
+              audioDelay = (currentAudioDelay * MILLISECONDS_TO_SECONDS).toInt(),
+              timeRemaining = timeRemaining,
+              savedOrientation = currentOrientation,
+              externalSubtitles = currentExternalSubs.joinToString("|"),
+              externalAudioTracks = currentExternalAudio.joinToString("|"),
+              hasBeenWatched = run {
+                // Check if we are at the end (effectively watched)
+                val isFinished = (currentDuration > 0) && (currentPos >= currentDuration - 1)
+                val isCurrentlyWatched = progress >= (watchedThreshold / 100f)
+
+                val oldProgress = if (currentDuration > 0) (oldState?.lastPosition?.toFloat() ?: 0f) / currentDuration.toFloat() else 0f
+                val wasWatchedThisSession = oldProgress >= (watchedThreshold / 100f)
+
+                isCurrentlyWatched || isFinished || wasWatchedThisSession || (oldState?.hasBeenWatched == true)
+              },
+            ),
+          )
+          lastPersistedPlaybackStateSequence = saveSequence
+          MediaFileRepository.clearCache()
+        }.onFailure { e ->
+          Log.e(TAG, "Error saving playback state", e)
         }
-
-        val timeRemaining = if (currentDuration > savePos) currentDuration - savePos else 0
-
-        playbackStateRepository.upsert(
-          PlaybackStateEntity(
-            mediaTitle = identifier,
-            lastPosition = savePos,
-            playbackSpeed = currentSpeed,
-            videoZoom = currentZoom,
-            sid = currentSid,
-            secondarySid = currentSecondarySid,
-            subDelay = (currentSubDelay * MILLISECONDS_TO_SECONDS).toInt(),
-            subSpeed = currentSubSpeed,
-            aid = currentAid,
-            audioDelay = (currentAudioDelay * MILLISECONDS_TO_SECONDS).toInt(),
-            timeRemaining = timeRemaining,
-            savedOrientation = currentOrientation,
-            externalSubtitles = currentExternalSubs.joinToString("|"),
-            externalAudioTracks = currentExternalAudio.joinToString("|"),
-            hasBeenWatched = run {
-              // Check if we are at the end (effectively watched)
-              val isFinished = (currentDuration > 0) && (currentPos >= currentDuration - 1)
-              val isCurrentlyWatched = progress >= (watchedThreshold / 100f)
-
-              val oldProgress = if (currentDuration > 0) (oldState?.lastPosition?.toFloat() ?: 0f) / currentDuration.toFloat() else 0f
-              val wasWatchedThisSession = oldProgress >= (watchedThreshold / 100f)
-
-              isCurrentlyWatched || isFinished || wasWatchedThisSession || (oldState?.hasBeenWatched == true)
-            },
-          ),
-        )
-        MediaFileRepository.clearCache()
-      }.onFailure { e ->
-        Log.e(TAG, "Error saving playback state", e)
       }
     }
   }
@@ -2546,7 +2557,7 @@ class PlayerActivity :
   private suspend fun applyPlaybackState(state: PlaybackStateEntity?) {
     if (state == null) {
       // Force reset position for new items in playlist
-      if (intentPositionMs == POSITION_NOT_SET) {
+      if (intentPositionMs == POSITION_NOT_SET.toLong()) {
         MPVLib.setPropertyInt("time-pos", 0)
       }
       return
@@ -2612,7 +2623,7 @@ class PlayerActivity :
     MPVLib.setPropertyDouble("video-zoom", state.videoZoom.toDouble())
     viewModel.setVideoZoom(state.videoZoom)
 
-    if (intentPositionMs == POSITION_NOT_SET) {
+    if (intentPositionMs == POSITION_NOT_SET.toLong()) {
       if (playerPreferences.savePositionOnQuit.get() && state != null && state.lastPosition > 3) {
         MPVLib.setPropertyInt("time-pos", state.lastPosition)
       } else {
@@ -2649,15 +2660,18 @@ class PlayerActivity :
    * Called when activity is finishing to return data to caller.
    */
   private fun setReturnIntent() {
-    Log.d(TAG, "Setting return intent")
+    if (!shouldReturnStremioResult) return
 
-    val resultIntent =
-      Intent(RESULT_INTENT).apply {
-        viewModel.pos?.let { putExtra("position", it * MILLISECONDS_TO_SECONDS) }
-        viewModel.duration?.let { putExtra("duration", it * MILLISECONDS_TO_SECONDS) }
-      }
-
-    setResult(RESULT_OK, resultIntent)
+    val precisePosition = viewModel.precisePosition.value.toDouble()
+      .takeIf { it.isFinite() && it >= 0.0 && (it > 0.0 || viewModel.pos == 0) }
+    val preciseDuration = viewModel.preciseDuration.value.toDouble()
+      .takeIf { it.isFinite() && it > 0.0 }
+    val result = StremioHandoff.normalizeResult(
+      positionMs = StremioHandoff.millisecondsFromSeconds(precisePosition ?: viewModel.pos?.toDouble()),
+      durationMs = StremioHandoff.millisecondsFromSeconds(preciseDuration ?: viewModel.duration?.toDouble()),
+    )
+    Log.d(TAG, "Setting Stremio return intent: position=${result.positionMs}ms duration=${result.durationMs}ms")
+    setResult(RESULT_OK, StremioHandoff.resultIntent(result))
   }
 
   /**
@@ -2669,7 +2683,8 @@ class PlayerActivity :
     super.onNewIntent(intent)
 
     pendingIntentExtras = true
-    intentPositionMs = POSITION_NOT_SET
+    intentPositionMs = POSITION_NOT_SET.toLong()
+    shouldReturnStremioResult = StremioHandoff.requestedResult(intent)
     logIntentExtras("onNewIntent", intent)
     viewModel.markStremioHandoff(isStremioHandoff(intent))
     // Update the intent first so getFileName uses the new intent data
@@ -4174,11 +4189,6 @@ class PlayerActivity :
 
 
   companion object {
-    /**
-     * Intent action used to return playback result data to the calling activity.
-     */
-    private const val RESULT_INTENT = "xyz.mpv.rex.ui.player.PlayerActivity.result"
-
     /**
      * Constant for "brightness not set".
      */
