@@ -20,16 +20,10 @@ class StremioHandoffTest {
   }
 
   @Test
-  fun resultIsClampedToKnownDuration() {
-    val result = StremioHandoff.normalizeResult(125_000L, 100_000L)
+  fun resultUsesOriginalIntMillisecondContract() {
+    val result = StremioHandoff.result(positionSeconds = 125, durationSeconds = 3600)
 
-    assertEquals(100_000L, result.positionMs)
-    assertEquals(100_000L, result.durationMs)
-  }
-
-  @Test
-  fun secondsAreConvertedToPreciseMilliseconds() {
-    assertEquals(12_346L, StremioHandoff.millisecondsFromSeconds(12.3456))
-    assertNull(StremioHandoff.millisecondsFromSeconds(Double.POSITIVE_INFINITY))
+    assertEquals(125_000, result.positionMs)
+    assertEquals(3_600_000, result.durationMs)
   }
 }

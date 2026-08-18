@@ -1,4 +1,4 @@
-# mpvRex Stremio Edition 4.5.10
+# mpvRex Stremio Edition 4.5.11
 
 ## Removed
 
@@ -15,6 +15,7 @@
 - Buffering percentage display now falls back to MPV's reported cached range when
   `cache-buffering-state` is unavailable or invalid.
 - Network cache and read-ahead settings remain isolated from local-file playback.
-- Stremio playback positions now accept safe numeric intent types, use millisecond
-  normalization, and return clamped position and duration values only when requested.
+- Stremio playback positions accept safe numeric intent types and use millisecond normalization.
+- Restored the original unconditional `Int` millisecond result payload for compatibility
+  with Stremio external-player progress handling.
 - Playback-state writes are serialized so older lifecycle snapshots cannot overwrite newer saves.

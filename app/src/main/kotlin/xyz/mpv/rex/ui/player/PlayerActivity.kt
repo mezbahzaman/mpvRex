@@ -244,7 +244,6 @@ class PlayerActivity :
   private var lastPersistedPlaybackStateSequence = 0L
   private var pendingIntentExtras = false // Track if intent extras should be applied to next loaded file
   private var intentPositionMs = POSITION_NOT_SET.toLong() // Incoming position (ms) from launching intent (e.g. external launcher like Stremio); authoritative over internal resume state
-  private var shouldReturnStremioResult = false
   private var loadedPlaybackState: PlaybackStateEntity? = null
   private var lastVid = -1 // Track video track for background playback optimization
   private var isInBackgroundPlayback = false // Track if we are currently in background playback mode
@@ -362,7 +361,6 @@ class PlayerActivity :
 
     pendingIntentExtras = true
     intentPositionMs = POSITION_NOT_SET.toLong()
-    shouldReturnStremioResult = StremioHandoff.requestedResult(intent)
     logIntentExtras("onCreate", intent)
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
@@ -2660,18 +2658,8 @@ class PlayerActivity :
    * Called when activity is finishing to return data to caller.
    */
   private fun setReturnIntent() {
-    if (!shouldReturnStremioResult) return
-
-    val precisePosition = viewModel.precisePosition.value.toDouble()
-      .takeIf { it.isFinite() && it >= 0.0 && (it > 0.0 || viewModel.pos == 0) }
-    val preciseDuration = viewModel.preciseDuration.value.toDouble()
-      .takeIf { it.isFinite() && it > 0.0 }
-    val result = StremioHandoff.normalizeResult(
-      positionMs = StremioHandoff.millisecondsFromSeconds(precisePosition ?: viewModel.pos?.toDouble()),
-      durationMs = StremioHandoff.millisecondsFromSeconds(preciseDuration ?: viewModel.duration?.toDouble()),
-    )
-    Log.d(TAG, "Setting Stremio return intent: position=${result.positionMs}ms duration=${result.durationMs}ms")
-    setResult(RESULT_OK, StremioHandoff.resultIntent(result))
+    Log.d(TAG, "Setting external-player return intent")
+    setResult(RESULT_OK, StremioHandoff.resultIntent(viewModel.pos, viewModel.duration))
   }
 
   /**
@@ -2684,7 +2672,6 @@ class PlayerActivity :
 
     pendingIntentExtras = true
     intentPositionMs = POSITION_NOT_SET.toLong()
-    shouldReturnStremioResult = StremioHandoff.requestedResult(intent)
     logIntentExtras("onNewIntent", intent)
     viewModel.markStremioHandoff(isStremioHandoff(intent))
     // Update the intent first so getFileName uses the new intent data

@@ -2,14 +2,11 @@ package xyz.mpv.rex.ui.player
 
 import android.content.Intent
 import android.os.Bundle
-import kotlin.math.roundToLong
 
-/** Normalized data exchanged by the Stremio external-player handoff. */
-internal data class StremioPlaybackResult(
-  val positionMs: Long?,
-  val durationMs: Long?,
+internal data class ExternalPlayerResult(
+  val positionMs: Int?,
+  val durationMs: Int?,
 )
-
 internal object StremioHandoff {
   const val RESULT_ACTION = "xyz.mpv.rex.ui.player.PlayerActivity.result"
   const val POSITION_EXTRA = "position"
@@ -34,21 +31,15 @@ internal object StremioHandoff {
     else -> null
   }?.takeIf { it >= 0 }
 
-  fun millisecondsFromSeconds(seconds: Double?): Long? = seconds
-    ?.takeIf { it.isFinite() && it >= 0.0 && it <= Long.MAX_VALUE / 1000.0 }
-    ?.times(1000.0)
-    ?.roundToLong()
+  /** Preserve the original external-player result contract: Int milliseconds. */
+  fun result(positionSeconds: Int?, durationSeconds: Int?) = ExternalPlayerResult(
+    positionMs = positionSeconds?.times(1000),
+    durationMs = durationSeconds?.times(1000),
+  )
 
-  fun resultIntent(result: StremioPlaybackResult): Intent = Intent(RESULT_ACTION).apply {
+  fun resultIntent(positionSeconds: Int?, durationSeconds: Int?): Intent = Intent(RESULT_ACTION).apply {
+    val result = result(positionSeconds, durationSeconds)
     result.positionMs?.let { putExtra(POSITION_EXTRA, it) }
     result.durationMs?.let { putExtra(DURATION_EXTRA, it) }
-  }
-
-  fun normalizeResult(positionMs: Long?, durationMs: Long?): StremioPlaybackResult {
-    val duration = durationMs?.takeIf { it > 0 }
-    val position = positionMs?.takeIf { it >= 0 }?.let { value ->
-      duration?.let { value.coerceIn(0, it) } ?: value
-    }
-    return StremioPlaybackResult(position, duration)
   }
 }
