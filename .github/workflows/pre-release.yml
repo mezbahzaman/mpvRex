@@ -53,40 +53,7 @@ jobs:
           fi
           ls -lah "$PREVIEW_DIR"
 
-      - name: Sign APKs
-        if: ${{ secrets.SIGNING_KEYSTORE != '' && secrets.SIGNING_KEY_ALIAS != '' && secrets.SIGNING_STORE_PASSWORD != '' }}
-        run: |
-          set -euo pipefail
-          PREVIEW_DIR="app/build/outputs/apk/preview"
-          
-          echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > release.keystore
-          
-          APK_COUNT=$(find "$PREVIEW_DIR" -name "app-*-preview-unsigned.apk" -type f | wc -l)
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "No preview APK files found"
-            ls -lah "$PREVIEW_DIR"
-            rm release.keystore
-            exit 1
-          fi
-          
-          find "$PREVIEW_DIR" -name "app-*-preview-unsigned.apk" -type f | while read -r apk; do
-            signed_apk="${apk/-unsigned/}"
-            $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
-              --ks release.keystore \
-              --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
-              --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
-              --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
-              --out "$signed_apk" \
-              "$apk"
-            $ANDROID_HOME/build-tools/34.0.0/apksigner verify "$signed_apk"
-            rm "$apk"
-          done
-          
-          rm release.keystore
-          ls -lh "$PREVIEW_DIR"/app-*-preview.apk
-
       - name: Prepare unsigned debug APKs
-        if: ${{ secrets.SIGNING_KEYSTORE == '' || secrets.SIGNING_KEY_ALIAS == '' || secrets.SIGNING_STORE_PASSWORD == '' }}
         run: |
           set -euo pipefail
           PREVIEW_DIR="app/build/outputs/apk/preview"
@@ -107,13 +74,13 @@ jobs:
           shopt -s nullglob
           apks=(app/build/outputs/apk/preview/app-*-preview.apk)
           if [ "${#apks[@]}" -eq 0 ]; then
-            echo "No signed preview APKs found"
+            echo "No unsigned preview APKs found"
             exit 1
           fi
           for src in "${apks[@]}"; do
             abi="${src##*/app-}"
             abi="${abi%-preview.apk}"
-            cp "$src" "preview/mpvRex-debug-${abi}-${VERSION_TAG}.apk"
+            cp "$src" "preview/mpvRex-debug-unsigned-${abi}-${VERSION_TAG}.apk"
           done
           (cd preview && sha256sum *.apk > SHA256SUMS.txt)
 
@@ -130,7 +97,7 @@ jobs:
 
             This is a debug pre-release intended for testing the new integration. Apps connected to the same Trakt account, including Stremio when Trakt integration is enabled there, can consume the reported watch state. Configure your Trakt API client ID and secret under **Settings > Extra Settings > Trakt Scrobbling**. The Trakt application redirect URI must be `mpvrex://trakt-callback`.
 
-            The attached debug APK is unsigned because release-signing credentials are not configured for this repository workflow.
+            The attached debug APK is intentionally unsigned for this test release.
 
             SHA-256 checksums are included in the attached `SHA256SUMS.txt` file.
           files: |
