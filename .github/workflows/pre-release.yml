@@ -6,7 +6,8 @@ permissions:
 on:
   push:
     tags:
-      - 'v*-preview.[0-9]+'
+      - 'v*-preview.*'
+      - 'v*-debug.*'
 
 jobs:
   release-for-github:
@@ -33,7 +34,14 @@ jobs:
 
       - name: Get tag name
         if: startsWith(github.ref, 'refs/tags/')
-        run: echo "VERSION_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        run: |
+          VERSION_TAG="${GITHUB_REF#refs/tags/}"
+          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
+          if [[ "$VERSION_TAG" == *-debug.* ]]; then
+            echo "RELEASE_NAME=mpvRex $VERSION_TAG Debug" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_NAME=mpvRex $VERSION_TAG" >> "$GITHUB_ENV"
+          fi
 
       - name: Verify build output
         run: |
@@ -47,12 +55,12 @@ jobs:
 
       - name: Sign APKs
         run: |
-          set -e
+          set -euo pipefail
           PREVIEW_DIR="app/build/outputs/apk/preview"
           
           echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > release.keystore
           
-          APK_COUNT=$(find "$PREVIEW_DIR" -name "app-*-preview.apk" -type f | wc -l)
+          APK_COUNT=$(find "$PREVIEW_DIR" -name "app-*-preview-unsigned.apk" -type f | wc -l)
           if [ "$APK_COUNT" -eq 0 ]; then
             echo "No preview APK files found"
             ls -lah "$PREVIEW_DIR"
@@ -60,14 +68,17 @@ jobs:
             exit 1
           fi
           
-          find "$PREVIEW_DIR" -name "app-*-preview.apk" -type f | while read -r apk; do
+          find "$PREVIEW_DIR" -name "app-*-preview-unsigned.apk" -type f | while read -r apk; do
+            signed_apk="${apk/-unsigned/}"
             $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
               --ks release.keystore \
               --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
               --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
               --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+              --out "$signed_apk" \
               "$apk"
-            $ANDROID_HOME/build-tools/34.0.0/apksigner verify "$apk"
+            $ANDROID_HOME/build-tools/34.0.0/apksigner verify "$signed_apk"
+            rm "$apk"
           done
           
           rm release.keystore
@@ -75,41 +86,38 @@ jobs:
 
       - name: Copy built artifacts
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p preview
-          declare -a apks=("universal" "arm64-v8a" "armeabi-v7a" "x86" "x86_64")
-
-          for abi in "${apks[@]}"; do
-            src="app/build/outputs/apk/preview/app-${abi}-preview.apk"
-            dest="preview/mpvRex-preview-${abi}-${{ env.VERSION_TAG }}.apk"
-            if [ -f "$src" ]; then
-              cp "$src" "$dest"
-              sha=$(sha256sum "$dest" | awk '{ print $1 }')
-              echo "apk-${abi}-sha256=$sha" >> $GITHUB_ENV
-            fi
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/preview/app-*-preview.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "No signed preview APKs found"
+            exit 1
+          fi
+          for src in "${apks[@]}"; do
+            abi="${src##*/app-}"
+            abi="${abi%-preview.apk}"
+            cp "$src" "preview/mpvRex-debug-${abi}-${VERSION_TAG}.apk"
           done
+          (cd preview && sha256sum *.apk > SHA256SUMS.txt)
 
       - name: Create GitHub pre-release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.VERSION_TAG }}
-          name: "mpvRex ${{ env.VERSION_TAG }}"
+          name: ${{ env.RELEASE_NAME }}
           body: |
-            
-            ### Checksums
-            | Variant | SHA-256 |
-            | ------- | ------- |
-            | arm64-v8a | ${{ env.apk-arm64-v8a-sha256 }} |
-            | armeabi-v7a | ${{ env.apk-armeabi-v7a-sha256 }} |
-            | Universal | ${{ env.apk-universal-sha256 }} |
-            | x86 | ${{ env.apk-x86-sha256 }} |
-            | x86_64 | ${{ env.apk-x86_64-sha256 }} |
+            ### New feature
+            - Added Trakt scrobbling with browser-based OAuth authentication.
+            - Reports start, pause, resume, stop, and periodic playback progress to Trakt.
+            - Supports confidently identified movies and season/episode filenames, including IMDb IDs when present.
+
+            This is a debug pre-release intended for testing the new integration. Apps connected to the same Trakt account, including Stremio when Trakt integration is enabled there, can consume the reported watch state. Configure your Trakt API client ID and secret under **Settings > Extra Settings > Trakt Scrobbling**. The Trakt application redirect URI must be `mpvrex://trakt-callback`.
+
+            SHA-256 checksums are included in the attached `SHA256SUMS.txt` file.
           files: |
-            preview/mpvRex-preview-universal-${{ env.VERSION_TAG }}.apk
-            preview/mpvRex-preview-arm64-v8a-${{ env.VERSION_TAG }}.apk
-            preview/mpvRex-preview-armeabi-v7a-${{ env.VERSION_TAG }}.apk
-            preview/mpvRex-preview-x86-${{ env.VERSION_TAG }}.apk
-            preview/mpvRex-preview-x86_64-${{ env.VERSION_TAG }}.apk
+            preview/*.apk
+            preview/SHA256SUMS.txt
           draft: false
           prerelease: true
         env:

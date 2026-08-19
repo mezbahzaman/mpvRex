@@ -11,8 +11,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -34,6 +36,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.Serializable
@@ -44,6 +48,9 @@ import xyz.mpv.rex.R
 import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.preferences.preference.collectAsState
 import xyz.mpv.rex.presentation.Screen
+import xyz.mpv.rex.trakt.ScrobbleManager
+import xyz.mpv.rex.trakt.TraktPreferences
+import xyz.mpv.rex.trakt.TraktScrobbler
 import xyz.mpv.rex.ui.preferences.components.SwitchPreference
 import xyz.mpv.rex.ui.utils.LocalBackStack
 import xyz.mpv.rex.utils.media.OpenDocumentTreeContract
@@ -56,6 +63,9 @@ object ExtraPreferencesScreen : Screen {
     val context = LocalContext.current
     val backStack = LocalBackStack.current
     val preferences = koinInject<ExtraPreferences>()
+    val traktPreferences = koinInject<TraktPreferences>()
+    val traktScrobbler = koinInject<TraktScrobbler>()
+    val scrobbleManager = koinInject<ScrobbleManager>()
     val autoStremioSubtitles by preferences.autoStremioSubtitles.collectAsState()
     val maximumBufferedSeconds by preferences.maximumBufferedSeconds.collectAsState()
     val maximumNetworkDownloadMiB by preferences.maximumNetworkDownloadMiB.collectAsState()
@@ -64,8 +74,19 @@ object ExtraPreferencesScreen : Screen {
     val autoLocalSubtitles by preferences.autoLocalSubtitles.collectAsState()
     val excludedFolders by preferences.localSubtitleExcludedFolders.collectAsState()
 
+    val traktEnabled by traktPreferences.enabled.collectAsState()
+    val traktClientId by traktPreferences.clientId.collectAsState()
+    val traktClientSecret by traktPreferences.clientSecret.collectAsState()
+    val traktAccessToken by traktPreferences.accessToken.collectAsState()
+    val traktUsername by traktPreferences.username.collectAsState()
+    val isTraktConnected = traktAccessToken.isNotBlank()
+
     var numberDialog by remember { mutableStateOf<NumberSetting?>(null) }
     var showPingHostDialog by remember { mutableStateOf(false) }
+    var showClientIdDialog by remember { mutableStateOf(false) }
+    var showClientSecretDialog by remember { mutableStateOf(false) }
+    var showDisconnectDialog by remember { mutableStateOf(false) }
+
     val folderPicker = rememberLauncherForActivityResult(OpenDocumentTreeContract()) { uri ->
       if (uri != null) {
         runCatching {
@@ -95,6 +116,47 @@ object ExtraPreferencesScreen : Screen {
         onSave = {
           preferences.pingHost.set(it)
           showPingHostDialog = false
+        },
+      )
+    }
+    if (showClientIdDialog) {
+      ValidatedTextDialog(
+        title = stringResource(R.string.pref_trakt_client_id_title),
+        initialValue = traktClientId,
+        onDismiss = { showClientIdDialog = false },
+        onSave = {
+          traktPreferences.clientId.set(it)
+          showClientIdDialog = false
+        },
+      )
+    }
+    if (showClientSecretDialog) {
+      ValidatedTextDialog(
+        title = stringResource(R.string.pref_trakt_client_secret_title),
+        initialValue = traktClientSecret,
+        isSecret = true,
+        onDismiss = { showClientSecretDialog = false },
+        onSave = {
+          traktPreferences.clientSecret.set(it)
+          showClientSecretDialog = false
+        },
+      )
+    }
+    if (showDisconnectDialog) {
+      AlertDialog(
+        onDismissRequest = { showDisconnectDialog = false },
+        title = { Text(stringResource(R.string.pref_trakt_disconnect_confirm_title)) },
+        text = { Text(stringResource(R.string.pref_trakt_disconnect_confirm_message)) },
+        confirmButton = {
+          TextButton(onClick = {
+            scrobbleManager.logout()
+            showDisconnectDialog = false
+          }) { Text(stringResource(R.string.generic_ok)) }
+        },
+        dismissButton = {
+          TextButton(onClick = { showDisconnectDialog = false }) {
+            Text(stringResource(R.string.generic_cancel))
+          }
         },
       )
     }
@@ -245,6 +307,64 @@ object ExtraPreferencesScreen : Screen {
               }
             }
           }
+
+          item { PreferenceSectionHeader(stringResource(R.string.pref_trakt_section)) }
+          item {
+            PreferenceCard {
+              SwitchPreference(
+                value = traktEnabled,
+                onValueChange = {
+                  traktPreferences.enabled.set(it)
+                  if (!it) {
+                    scrobbleManager.destroy()
+                  }
+                },
+                title = { Text(stringResource(R.string.pref_trakt_enable_title)) },
+                summary = { Text(stringResource(R.string.pref_trakt_enable_summary)) },
+              )
+              PreferenceDivider()
+              ValuePreference(
+                title = stringResource(R.string.pref_trakt_client_id_title),
+                summary = traktClientId.ifBlank { stringResource(R.string.pref_trakt_client_id_summary) },
+                onClick = { showClientIdDialog = true },
+              )
+              PreferenceDivider()
+              ValuePreference(
+                title = stringResource(R.string.pref_trakt_client_secret_title),
+                summary = if (traktClientSecret.isNotBlank()) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else stringResource(R.string.pref_trakt_client_secret_summary),
+                onClick = { showClientSecretDialog = true },
+              )
+              PreferenceDivider()
+              if (isTraktConnected) {
+                Preference(
+                  title = {
+                    Text(
+                      stringResource(R.string.pref_trakt_connected_as, traktUsername.ifBlank { "Trakt user" })
+                    )
+                  },
+                  icon = { Icon(Icons.Outlined.Check, contentDescription = null) },
+                )
+                PreferenceDivider()
+                Preference(
+                  title = { Text(stringResource(R.string.pref_trakt_disconnect)) },
+                  icon = { Icon(Icons.Outlined.LinkOff, contentDescription = null) },
+                  onClick = { showDisconnectDialog = true },
+                )
+              } else {
+                Preference(
+                  title = { Text(stringResource(R.string.pref_trakt_authenticate_title)) },
+                  summary = { Text(stringResource(R.string.pref_trakt_authenticate_summary)) },
+                  onClick = {
+                    if (traktPreferences.hasCredentials()) {
+                      val authUrl = traktScrobbler.getAuthUrl()
+                      val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(authUrl))
+                      context.startActivity(intent)
+                    }
+                  },
+                )
+              }
+            }
+          }
         }
       }
     }
@@ -321,6 +441,7 @@ private fun ValidatedNumberDialog(
 private fun ValidatedTextDialog(
   title: String,
   initialValue: String,
+  isSecret: Boolean = false,
   onDismiss: () -> Unit,
   onSave: (String) -> Unit,
 ) {
@@ -342,6 +463,7 @@ private fun ValidatedTextDialog(
           } else {
             null
           },
+        visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
       )
     },
     confirmButton = {

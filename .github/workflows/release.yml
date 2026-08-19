@@ -10,7 +10,7 @@ on:
 
 jobs:
   release-for-github:
-    if: ${{ !endsWith(github.ref_name, '-patched') }}
+    if: ${{ !endsWith(github.ref_name, '-patched') && !contains(github.ref_name, '-preview.') && !contains(github.ref_name, '-debug.') }}
     name: "Release for GitHub"
     runs-on: ubuntu-latest
 
