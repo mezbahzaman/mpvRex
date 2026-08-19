@@ -51,7 +51,6 @@ import xyz.mpv.rex.utils.permission.PermissionUtils
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayer
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
 import xyz.mpv.rex.ui.browser.LocalNavigationBarHeight
-import xyz.mpv.rex.trakt.MdbListScrobbler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -64,7 +63,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.android.ext.android.inject
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -98,9 +96,6 @@ class MainActivity : ComponentActivity() {
     // Register proxy lifecycle observer for network streaming
     lifecycle.addObserver(xyz.mpv.rex.ui.browser.networkstreaming.proxy.ProxyLifecycleObserver())
 
-    // Handle OAuth callback
-    handleMdbListCallback(intent)
-
     setContent {
       // Set up theme and edge-to-edge display
       val dark by appearancePreferences.darkMode.collectAsState()
@@ -122,22 +117,6 @@ class MainActivity : ComponentActivity() {
         Surface {
           Navigator()
         }
-      }
-    }
-  }
-
-  override fun onNewIntent(intent: Intent) {
-    super.onNewIntent(intent)
-    handleMdbListCallback(intent)
-  }
-
-  private fun handleMdbListCallback(intent: Intent?) {
-    val uri = intent?.data ?: return
-    if (uri.scheme == "mpvrex" && uri.host == "mdblist-callback") {
-      val apiKey = uri.getQueryParameter("apikey")
-      if (!apiKey.isNullOrBlank()) {
-        setIntent(Intent())
-        Log.d("MainActivity", "MDBList callback received")
       }
     }
   }

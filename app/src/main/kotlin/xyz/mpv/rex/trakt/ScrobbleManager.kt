@@ -188,7 +188,6 @@ class ScrobbleManager(
   }
 
   private suspend fun stopCurrentScrobble() {
-    stopPeriodicUpdates()
     val mediaInfo = currentMediaInfo ?: return
     val progress = lastProgressSent.coerceAtLeast(MIN_SCROBBLE_PROGRESS)
     mdbListScrobbler.scrobble("stop", mediaInfo.toScrobbleRequest(progress)).onFailure {

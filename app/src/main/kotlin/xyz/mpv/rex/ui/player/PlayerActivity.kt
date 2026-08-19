@@ -71,7 +71,6 @@ import xyz.mpv.rex.utils.storage.FileTypeUtils
 import xyz.mpv.rex.utils.storage.FileFilterUtils
 import xyz.mpv.rex.repository.MediaFileRepository
 import xyz.mpv.rex.ui.player.SingleActionGesture
-import xyz.mpv.rex.trakt.MdbListScrobbler
 import xyz.mpv.rex.trakt.ScrobbleManager
 import xyz.mpv.rex.trakt.ScrobbleMediaInfo
 import xyz.mpv.rex.utils.media.MediaInfoParser
@@ -202,7 +201,6 @@ class PlayerActivity :
   private val thumbnailRepository: ThumbnailRepository by inject()
   private val uriThumbnailCache = android.util.LruCache<String, android.graphics.Bitmap>(32)
 
-  // Trakt scrobbling
   private val scrobbleManager: ScrobbleManager by inject()
 
   /**
@@ -892,7 +890,6 @@ class PlayerActivity :
       
       setReturnIntent()
 
-      // Stop Trakt scrobbling on player finish
       stopScrobble()
 
     }.onFailure { e ->
@@ -922,7 +919,6 @@ class PlayerActivity :
       
       setReturnIntent()
 
-      // Stop Trakt scrobbling on player finish
       stopScrobble()
 
     }.onFailure { e ->
@@ -1349,7 +1345,7 @@ class PlayerActivity :
     return false
   }
 
-  // ==================== Trakt Scrobbling ====================
+  // ==================== MDBList Scrobbling ====================
 
   private fun calculateScrobbleProgress(): Double {
     val pos = viewModel.pos ?: return 0.0
@@ -2337,7 +2333,6 @@ class PlayerActivity :
     // Asynchronously fetch better filename from HTTP headers for network streams
     fetchNetworkStreamTitle()
 
-    // Start Trakt scrobbling for this file
     startScrobble()
   }
 

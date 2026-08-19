@@ -41,14 +41,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.mpvex.Launcher">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="mpvrex" android:host="mdblist-callback" />
-            </intent-filter>
-        </activity>
+            android:theme="@style/Theme.mpvex.Launcher" />
 
         <activity-alias
             android:name="app.marlboroadvance.mpvex.MainActivity"

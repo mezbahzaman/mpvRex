@@ -116,7 +116,7 @@ object ExtraPreferencesScreen : Screen {
     }
     if (showApiKeyDialog) {
       ValidatedTextDialog(
-        title = stringResource(R.string.pref_trakt_client_id_title),
+        title = stringResource(R.string.pref_mdblist_client_id_title),
         initialValue = mdbApiKey,
         isSecret = true,
         onDismiss = { showApiKeyDialog = false },
@@ -129,8 +129,8 @@ object ExtraPreferencesScreen : Screen {
     if (showDisconnectDialog) {
       AlertDialog(
         onDismissRequest = { showDisconnectDialog = false },
-        title = { Text(stringResource(R.string.pref_trakt_disconnect_confirm_title)) },
-        text = { Text(stringResource(R.string.pref_trakt_disconnect_confirm_message)) },
+        title = { Text(stringResource(R.string.pref_mdblist_disconnect_confirm_title)) },
+        text = { Text(stringResource(R.string.pref_mdblist_disconnect_confirm_message)) },
         confirmButton = {
           TextButton(onClick = {
             scrobbleManager.logout()
@@ -292,7 +292,7 @@ object ExtraPreferencesScreen : Screen {
             }
           }
 
-          item { PreferenceSectionHeader(stringResource(R.string.pref_trakt_section)) }
+          item { PreferenceSectionHeader(stringResource(R.string.pref_mdblist_section)) }
           item {
             PreferenceCard {
               SwitchPreference(
@@ -303,13 +303,13 @@ object ExtraPreferencesScreen : Screen {
                     scrobbleManager.destroy()
                   }
                 },
-                title = { Text(stringResource(R.string.pref_trakt_enable_title)) },
-                summary = { Text(stringResource(R.string.pref_trakt_enable_summary)) },
+                title = { Text(stringResource(R.string.pref_mdblist_enable_title)) },
+                summary = { Text(stringResource(R.string.pref_mdblist_enable_summary)) },
               )
               PreferenceDivider()
               ValuePreference(
-                title = stringResource(R.string.pref_trakt_client_id_title),
-                summary = if (isConnected) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else stringResource(R.string.pref_trakt_client_id_summary),
+                title = stringResource(R.string.pref_mdblist_client_id_title),
+                summary = if (isConnected) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else stringResource(R.string.pref_mdblist_client_id_summary),
                 onClick = { showApiKeyDialog = true },
               )
               PreferenceDivider()
@@ -317,21 +317,21 @@ object ExtraPreferencesScreen : Screen {
                 Preference(
                   title = {
                     Text(
-                      stringResource(R.string.pref_trakt_connected_as, mdbUsername.ifBlank { "MDBList user" })
+                      stringResource(R.string.pref_mdblist_connected_as, mdbUsername.ifBlank { "MDBList user" })
                     )
                   },
                   icon = { Icon(Icons.Outlined.Check, contentDescription = null) },
                 )
                 PreferenceDivider()
                 Preference(
-                  title = { Text(stringResource(R.string.pref_trakt_disconnect)) },
+                  title = { Text(stringResource(R.string.pref_mdblist_disconnect)) },
                   icon = { Icon(Icons.Outlined.LinkOff, contentDescription = null) },
                   onClick = { showDisconnectDialog = true },
                 )
               } else {
                 Preference(
-                  title = { Text(stringResource(R.string.pref_trakt_authenticate_title)) },
-                  summary = { Text(stringResource(R.string.pref_trakt_authenticate_summary)) },
+                  title = { Text(stringResource(R.string.pref_mdblist_authenticate_title)) },
+                  summary = { Text(stringResource(R.string.pref_mdblist_authenticate_summary)) },
                   onClick = { showApiKeyDialog = true },
                 )
               }
