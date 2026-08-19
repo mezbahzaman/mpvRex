@@ -54,6 +54,7 @@ jobs:
           ls -lah "$PREVIEW_DIR"
 
       - name: Sign APKs
+        if: ${{ secrets.SIGNING_KEYSTORE != '' && secrets.SIGNING_KEY_ALIAS != '' && secrets.SIGNING_STORE_PASSWORD != '' }}
         run: |
           set -euo pipefail
           PREVIEW_DIR="app/build/outputs/apk/preview"
@@ -84,6 +85,21 @@ jobs:
           rm release.keystore
           ls -lh "$PREVIEW_DIR"/app-*-preview.apk
 
+      - name: Prepare unsigned debug APKs
+        if: ${{ secrets.SIGNING_KEYSTORE == '' || secrets.SIGNING_KEY_ALIAS == '' || secrets.SIGNING_STORE_PASSWORD == '' }}
+        run: |
+          set -euo pipefail
+          PREVIEW_DIR="app/build/outputs/apk/preview"
+          shopt -s nullglob
+          apks=("$PREVIEW_DIR"/app-*-preview-unsigned.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "No unsigned preview APKs found"
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            mv "$apk" "${apk/-unsigned/}"
+          done
+
       - name: Copy built artifacts
         run: |
           set -euo pipefail
@@ -113,6 +129,8 @@ jobs:
             - Supports confidently identified movies and season/episode filenames, including IMDb IDs when present.
 
             This is a debug pre-release intended for testing the new integration. Apps connected to the same Trakt account, including Stremio when Trakt integration is enabled there, can consume the reported watch state. Configure your Trakt API client ID and secret under **Settings > Extra Settings > Trakt Scrobbling**. The Trakt application redirect URI must be `mpvrex://trakt-callback`.
+
+            The attached debug APK is unsigned because release-signing credentials are not configured for this repository workflow.
 
             SHA-256 checksums are included in the attached `SHA256SUMS.txt` file.
           files: |
