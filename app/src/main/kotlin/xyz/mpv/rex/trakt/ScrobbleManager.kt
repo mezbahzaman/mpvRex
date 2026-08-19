@@ -10,13 +10,13 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 
 class ScrobbleManager(
-  private val traktScrobbler: TraktScrobbler,
-  private val preferences: TraktPreferences,
+  private val mdbListScrobbler: MdbListScrobbler,
+  private val preferences: MdbListPreferences,
   private val scope: CoroutineScope,
 ) {
   companion object {
     private const val TAG = "ScrobbleManager"
-    private const val PROGRESS_UPDATE_INTERVAL_MS = 10_000L
+    private const val PROGRESS_UPDATE_INTERVAL_MS = 30_000L
     private const val MIN_SCROBBLE_PROGRESS = 1.0
   }
 
@@ -30,8 +30,7 @@ class ScrobbleManager(
   private val latestSessionKey = AtomicLong(0L)
   private val closedSessionKeys = mutableSetOf<Long>()
 
-  fun isEnabled(): Boolean =
-    preferences.enabled.get() && preferences.hasCredentials() && preferences.hasAuthentication()
+  fun isEnabled(): Boolean = preferences.isConfigured()
 
   fun newSessionKey(): Long = latestSessionKey.incrementAndGet()
 
@@ -54,7 +53,7 @@ class ScrobbleManager(
     this.progressProvider = progressProvider
 
     val request = mediaInfo.toScrobbleRequest(progressPercent)
-    val result = traktScrobbler.scrobble("start", request)
+    val result = mdbListScrobbler.scrobble("start", request)
     if (!isEnabled() || sessionKey != latestSessionKey.get()) {
       reset()
       return@withLock
@@ -77,7 +76,7 @@ class ScrobbleManager(
 
     val mediaInfo = currentMediaInfo ?: return@withLock
     val request = mediaInfo.toScrobbleRequest(progressPercent)
-    val result = traktScrobbler.scrobble("pause", request)
+    val result = mdbListScrobbler.scrobble("pause", request)
     if (result.isSuccess) {
       Log.d(TAG, "Scrobble paused: ${mediaInfo.title} at ${progressPercent}%")
     } else {
@@ -92,7 +91,7 @@ class ScrobbleManager(
 
     val mediaInfo = currentMediaInfo ?: return@withLock
     val request = mediaInfo.toScrobbleRequest(progressPercent)
-    val result = traktScrobbler.scrobble("start", request)
+    val result = mdbListScrobbler.scrobble("start", request)
     if (result.isSuccess) {
       Log.d(TAG, "Scrobble resumed: ${mediaInfo.title} at ${progressPercent}%")
     } else {
@@ -116,7 +115,7 @@ class ScrobbleManager(
     val mediaInfo = currentMediaInfo ?: return@withLock
     val clampedProgress = progressPercent.coerceAtLeast(MIN_SCROBBLE_PROGRESS)
     val request = mediaInfo.toScrobbleRequest(clampedProgress)
-    val result = traktScrobbler.scrobble("stop", request)
+    val result = mdbListScrobbler.scrobble("stop", request)
     if (result.isSuccess) {
       val action = result.getOrNull()?.action
       Log.d(TAG, "Scrobble stopped: ${mediaInfo.title} at ${clampedProgress}% (action=$action)")
@@ -152,7 +151,7 @@ class ScrobbleManager(
     val progress = progressProvider?.invoke() ?: lastProgressSent
     lastProgressSent = progress
     val request = mediaInfo.toScrobbleRequest(progress)
-    traktScrobbler.scrobble("start", request).onFailure {
+    mdbListScrobbler.scrobble("start", request).onFailure {
       Log.w(TAG, "Periodic scrobble update failed: ${it.message}")
     }
   }
@@ -171,7 +170,8 @@ class ScrobbleManager(
     scope.launch {
       mutex.withLock {
         reset()
-        traktScrobbler.logout()
+        preferences.apiKey.set("")
+        preferences.username.set("")
       }
     }
   }
@@ -191,7 +191,7 @@ class ScrobbleManager(
     stopPeriodicUpdates()
     val mediaInfo = currentMediaInfo ?: return
     val progress = lastProgressSent.coerceAtLeast(MIN_SCROBBLE_PROGRESS)
-    traktScrobbler.scrobble("stop", mediaInfo.toScrobbleRequest(progress)).onFailure {
+    mdbListScrobbler.scrobble("stop", mediaInfo.toScrobbleRequest(progress)).onFailure {
       Log.w(TAG, "Previous media scrobble stop failed: ${it.message}")
     }
     reset()

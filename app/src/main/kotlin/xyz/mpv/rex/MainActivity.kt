@@ -51,7 +51,7 @@ import xyz.mpv.rex.utils.permission.PermissionUtils
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayer
 import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
 import xyz.mpv.rex.ui.browser.LocalNavigationBarHeight
-import xyz.mpv.rex.trakt.TraktScrobbler
+import xyz.mpv.rex.trakt.MdbListScrobbler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -78,7 +78,6 @@ class MainActivity : ComponentActivity() {
   private val appearancePreferences by inject<AppearancePreferences>()
   private val networkRepository by inject<NetworkRepository>()
   private val miniPlayerStateManager by inject<MiniPlayerStateManager>()
-  private val traktScrobbler by inject<TraktScrobbler>()
   
   // Create a coroutine scope tied to the activity lifecycle
   private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -99,8 +98,8 @@ class MainActivity : ComponentActivity() {
     // Register proxy lifecycle observer for network streaming
     lifecycle.addObserver(xyz.mpv.rex.ui.browser.networkstreaming.proxy.ProxyLifecycleObserver())
 
-    // Handle Trakt OAuth callback
-    handleTraktCallback(intent)
+    // Handle OAuth callback
+    handleMdbListCallback(intent)
 
     setContent {
       // Set up theme and edge-to-edge display
@@ -129,28 +128,16 @@ class MainActivity : ComponentActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
-    handleTraktCallback(intent)
+    handleMdbListCallback(intent)
   }
 
-  private fun handleTraktCallback(intent: Intent?) {
+  private fun handleMdbListCallback(intent: Intent?) {
     val uri = intent?.data ?: return
-    if (uri.scheme == "mpvrex" && uri.host == "trakt-callback") {
-      val code = uri.getQueryParameter("code")
-      val state = uri.getQueryParameter("state")
-      if (!code.isNullOrBlank() && state != null && traktScrobbler.claimOAuthState(state)) {
+    if (uri.scheme == "mpvrex" && uri.host == "mdblist-callback") {
+      val apiKey = uri.getQueryParameter("apikey")
+      if (!apiKey.isNullOrBlank()) {
         setIntent(Intent())
-        Log.d("MainActivity", "Trakt OAuth callback received, exchanging code")
-        activityScope.launch {
-          val result = traktScrobbler.exchangeCodeForToken(code)
-          if (result.isSuccess) {
-            traktScrobbler.fetchUsername()
-            Log.d("MainActivity", "Trakt authentication successful")
-          } else {
-            Log.e("MainActivity", "Trakt token exchange failed: ${result.exceptionOrNull()?.message}")
-          }
-        }
-      } else {
-        Log.e("MainActivity", "Rejected invalid Trakt OAuth callback")
+        Log.d("MainActivity", "MDBList callback received")
       }
     }
   }

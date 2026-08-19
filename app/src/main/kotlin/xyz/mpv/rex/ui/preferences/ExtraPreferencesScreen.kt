@@ -48,9 +48,8 @@ import xyz.mpv.rex.R
 import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.preferences.preference.collectAsState
 import xyz.mpv.rex.presentation.Screen
+import xyz.mpv.rex.trakt.MdbListPreferences
 import xyz.mpv.rex.trakt.ScrobbleManager
-import xyz.mpv.rex.trakt.TraktPreferences
-import xyz.mpv.rex.trakt.TraktScrobbler
 import xyz.mpv.rex.ui.preferences.components.SwitchPreference
 import xyz.mpv.rex.ui.utils.LocalBackStack
 import xyz.mpv.rex.utils.media.OpenDocumentTreeContract
@@ -63,8 +62,7 @@ object ExtraPreferencesScreen : Screen {
     val context = LocalContext.current
     val backStack = LocalBackStack.current
     val preferences = koinInject<ExtraPreferences>()
-    val traktPreferences = koinInject<TraktPreferences>()
-    val traktScrobbler = koinInject<TraktScrobbler>()
+    val mdbListPreferences = koinInject<MdbListPreferences>()
     val scrobbleManager = koinInject<ScrobbleManager>()
     val autoStremioSubtitles by preferences.autoStremioSubtitles.collectAsState()
     val maximumBufferedSeconds by preferences.maximumBufferedSeconds.collectAsState()
@@ -74,17 +72,14 @@ object ExtraPreferencesScreen : Screen {
     val autoLocalSubtitles by preferences.autoLocalSubtitles.collectAsState()
     val excludedFolders by preferences.localSubtitleExcludedFolders.collectAsState()
 
-    val traktEnabled by traktPreferences.enabled.collectAsState()
-    val traktClientId by traktPreferences.clientId.collectAsState()
-    val traktClientSecret by traktPreferences.clientSecret.collectAsState()
-    val traktAccessToken by traktPreferences.accessToken.collectAsState()
-    val traktUsername by traktPreferences.username.collectAsState()
-    val isTraktConnected = traktAccessToken.isNotBlank()
+    val mdbEnabled by mdbListPreferences.enabled.collectAsState()
+    val mdbApiKey by mdbListPreferences.apiKey.collectAsState()
+    val mdbUsername by mdbListPreferences.username.collectAsState()
+    val isConnected = mdbApiKey.isNotBlank()
 
     var numberDialog by remember { mutableStateOf<NumberSetting?>(null) }
     var showPingHostDialog by remember { mutableStateOf(false) }
-    var showClientIdDialog by remember { mutableStateOf(false) }
-    var showClientSecretDialog by remember { mutableStateOf(false) }
+    var showApiKeyDialog by remember { mutableStateOf(false) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(OpenDocumentTreeContract()) { uri ->
@@ -119,26 +114,15 @@ object ExtraPreferencesScreen : Screen {
         },
       )
     }
-    if (showClientIdDialog) {
+    if (showApiKeyDialog) {
       ValidatedTextDialog(
         title = stringResource(R.string.pref_trakt_client_id_title),
-        initialValue = traktClientId,
-        onDismiss = { showClientIdDialog = false },
-        onSave = {
-          traktPreferences.clientId.set(it)
-          showClientIdDialog = false
-        },
-      )
-    }
-    if (showClientSecretDialog) {
-      ValidatedTextDialog(
-        title = stringResource(R.string.pref_trakt_client_secret_title),
-        initialValue = traktClientSecret,
+        initialValue = mdbApiKey,
         isSecret = true,
-        onDismiss = { showClientSecretDialog = false },
+        onDismiss = { showApiKeyDialog = false },
         onSave = {
-          traktPreferences.clientSecret.set(it)
-          showClientSecretDialog = false
+          mdbListPreferences.apiKey.set(it)
+          showApiKeyDialog = false
         },
       )
     }
@@ -312,9 +296,9 @@ object ExtraPreferencesScreen : Screen {
           item {
             PreferenceCard {
               SwitchPreference(
-                value = traktEnabled,
+                value = mdbEnabled,
                 onValueChange = {
-                  traktPreferences.enabled.set(it)
+                  mdbListPreferences.enabled.set(it)
                   if (!it) {
                     scrobbleManager.destroy()
                   }
@@ -325,21 +309,15 @@ object ExtraPreferencesScreen : Screen {
               PreferenceDivider()
               ValuePreference(
                 title = stringResource(R.string.pref_trakt_client_id_title),
-                summary = traktClientId.ifBlank { stringResource(R.string.pref_trakt_client_id_summary) },
-                onClick = { showClientIdDialog = true },
+                summary = if (isConnected) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else stringResource(R.string.pref_trakt_client_id_summary),
+                onClick = { showApiKeyDialog = true },
               )
               PreferenceDivider()
-              ValuePreference(
-                title = stringResource(R.string.pref_trakt_client_secret_title),
-                summary = if (traktClientSecret.isNotBlank()) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else stringResource(R.string.pref_trakt_client_secret_summary),
-                onClick = { showClientSecretDialog = true },
-              )
-              PreferenceDivider()
-              if (isTraktConnected) {
+              if (isConnected) {
                 Preference(
                   title = {
                     Text(
-                      stringResource(R.string.pref_trakt_connected_as, traktUsername.ifBlank { "Trakt user" })
+                      stringResource(R.string.pref_trakt_connected_as, mdbUsername.ifBlank { "MDBList user" })
                     )
                   },
                   icon = { Icon(Icons.Outlined.Check, contentDescription = null) },
@@ -354,13 +332,7 @@ object ExtraPreferencesScreen : Screen {
                 Preference(
                   title = { Text(stringResource(R.string.pref_trakt_authenticate_title)) },
                   summary = { Text(stringResource(R.string.pref_trakt_authenticate_summary)) },
-                  onClick = {
-                    if (traktPreferences.hasCredentials()) {
-                      val authUrl = traktScrobbler.getAuthUrl()
-                      val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(authUrl))
-                      context.startActivity(intent)
-                    }
-                  },
+                  onClick = { showApiKeyDialog = true },
                 )
               }
             }

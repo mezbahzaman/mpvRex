@@ -71,6 +71,7 @@ import xyz.mpv.rex.utils.storage.FileTypeUtils
 import xyz.mpv.rex.utils.storage.FileFilterUtils
 import xyz.mpv.rex.repository.MediaFileRepository
 import xyz.mpv.rex.ui.player.SingleActionGesture
+import xyz.mpv.rex.trakt.MdbListScrobbler
 import xyz.mpv.rex.trakt.ScrobbleManager
 import xyz.mpv.rex.trakt.ScrobbleMediaInfo
 import xyz.mpv.rex.utils.media.MediaInfoParser
