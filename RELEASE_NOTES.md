@@ -1,4 +1,14 @@
-# mpvRex Stremio Edition 4.5.11
+# mpvRex Stremio Edition 4.5.12
+
+## Fixed
+
+- Accept Stremio's `startfrom` playback-position extra when launching external streams.
+
+## Added
+
+- Added focused coverage for `startfrom` parsing and position precedence.
+
+## Previous Release
 
 ## Removed
 

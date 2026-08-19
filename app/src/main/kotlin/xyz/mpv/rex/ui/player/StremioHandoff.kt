@@ -10,6 +10,7 @@ internal data class ExternalPlayerResult(
 internal object StremioHandoff {
   const val RESULT_ACTION = "xyz.mpv.rex.ui.player.PlayerActivity.result"
   const val POSITION_EXTRA = "position"
+  const val START_FROM_EXTRA = "startfrom"
   const val DURATION_EXTRA = "duration"
   const val RETURN_RESULT_EXTRA = "return_result"
 
@@ -21,8 +22,11 @@ internal object StremioHandoff {
    * The contract is milliseconds; malformed, negative, and non-finite values are ignored.
    */
   fun positionMs(extras: Bundle?): Long? = extras?.let {
-    if (it.containsKey(POSITION_EXTRA)) positionMs(it.get(POSITION_EXTRA)) else null
+    positionMs(it.get(POSITION_EXTRA), it.get(START_FROM_EXTRA))
   }
+
+  fun positionMs(position: Any?, startFrom: Any?): Long? =
+    positionMs(position) ?: positionMs(startFrom)
 
   fun positionMs(value: Any?): Long? = when (value) {
     is Byte, is Short, is Int, is Long -> (value as Number).toLong()

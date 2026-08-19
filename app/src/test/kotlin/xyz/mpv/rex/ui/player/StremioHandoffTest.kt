@@ -20,6 +20,16 @@ class StremioHandoffTest {
   }
 
   @Test
+  fun startfromIsAcceptedAsTheStremioPositionAlias() {
+    assertEquals(1_134_245L, StremioHandoff.positionMs(null, 1_134_245L))
+  }
+
+  @Test
+  fun positionTakesPrecedenceOverStartfrom() {
+    assertEquals(125_500L, StremioHandoff.positionMs(125_500L, 1_134_245L))
+  }
+
+  @Test
   fun resultUsesOriginalIntMillisecondContract() {
     val result = StremioHandoff.result(positionSeconds = 125, durationSeconds = 3600)
 
