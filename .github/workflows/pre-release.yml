@@ -29,8 +29,8 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
-      - name: Build preview APKs
-        run: ./gradlew assemblePreview --stacktrace
+      - name: Build signed debug APK
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Get tag name
         if: startsWith(github.ref, 'refs/tags/')
@@ -45,26 +45,26 @@ jobs:
 
       - name: Verify build output
         run: |
-          PREVIEW_DIR="app/build/outputs/apk/preview"
-          if [ ! -d "$PREVIEW_DIR" ]; then
-            echo "Preview directory does not exist!"
+          DEBUG_DIR="app/build/outputs/apk/debug"
+          if [ ! -d "$DEBUG_DIR" ]; then
+            echo "Debug output directory does not exist!"
             find app/build/outputs -name "*.apk" -type f
             exit 1
           fi
-          ls -lah "$PREVIEW_DIR"
+          ls -lah "$DEBUG_DIR"
 
-      - name: Prepare unsigned debug APKs
+      - name: Verify APK signature
         run: |
           set -euo pipefail
-          PREVIEW_DIR="app/build/outputs/apk/preview"
+          DEBUG_DIR="app/build/outputs/apk/debug"
           shopt -s nullglob
-          apks=("$PREVIEW_DIR"/app-*-preview-unsigned.apk)
+          apks=("$DEBUG_DIR"/app-*-debug.apk)
           if [ "${#apks[@]}" -eq 0 ]; then
-            echo "No unsigned preview APKs found"
+            echo "No signed debug APKs found"
             exit 1
           fi
           for apk in "${apks[@]}"; do
-            mv "$apk" "${apk/-unsigned/}"
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk"
           done
 
       - name: Copy built artifacts
@@ -72,15 +72,15 @@ jobs:
           set -euo pipefail
           mkdir -p preview
           shopt -s nullglob
-          apks=(app/build/outputs/apk/preview/app-*-preview.apk)
+          apks=(app/build/outputs/apk/debug/app-*-debug.apk)
           if [ "${#apks[@]}" -eq 0 ]; then
-            echo "No unsigned preview APKs found"
+            echo "No signed debug APKs found"
             exit 1
           fi
           for src in "${apks[@]}"; do
             abi="${src##*/app-}"
-            abi="${abi%-preview.apk}"
-            cp "$src" "preview/mpvRex-debug-unsigned-${abi}-${VERSION_TAG}.apk"
+            abi="${abi%-debug.apk}"
+            cp "$src" "preview/mpvRex-debug-${abi}-${VERSION_TAG}.apk"
           done
           (cd preview && sha256sum *.apk > SHA256SUMS.txt)
 
@@ -97,7 +97,7 @@ jobs:
 
             This is a debug pre-release intended for testing the new integration. Apps connected to the same Trakt account, including Stremio when Trakt integration is enabled there, can consume the reported watch state. Configure your Trakt API client ID and secret under **Settings > Extra Settings > Trakt Scrobbling**. The Trakt application redirect URI must be `mpvrex://trakt-callback`.
 
-            The attached debug APK is intentionally unsigned for this test release.
+            The attached APK is signed with Android's debug certificate and uses the separate `xyz.mpv.rex.debug` application ID, so it can be installed alongside the release app.
 
             SHA-256 checksums are included in the attached `SHA256SUMS.txt` file.
           files: |
