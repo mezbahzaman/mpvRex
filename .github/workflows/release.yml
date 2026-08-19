@@ -7,6 +7,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: Existing tag to publish
+        required: true
+        type: string
 
 jobs:
   release-for-github:
@@ -19,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version_tag || github.ref }}
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -30,11 +37,31 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build release with Gradle
-        run: ./gradlew assembleRelease --stacktrace
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RELEASE_KEYSTORE_B64" | base64 -d > mpvrex-release.keystore
+          ./gradlew assembleRelease --stacktrace \
+            -PreleaseKeyStore="$PWD/mpvrex-release.keystore" \
+            -PreleaseKeyStorePassword="$KEYSTORE_PASSWORD" \
+            -PreleaseKeyAlias=mpvrex \
+            -PreleaseKeyPassword="$KEY_PASSWORD"
+          rm mpvrex-release.keystore
 
       - name: Get tag name
-        if: startsWith(github.ref, 'refs/tags/')
-        run: echo "VERSION_TAG=$(basename $GITHUB_REF)" >> $GITHUB_ENV
+        env:
+          REQUESTED_TAG: ${{ inputs.version_tag }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION_TAG="$REQUESTED_TAG"
+          fi
+          git rev-parse --verify "refs/tags/$VERSION_TAG"
+          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
 
       - name: Verify build output
         run: |
@@ -46,56 +73,41 @@ jobs:
           fi
           ls -lah "$RELEASE_DIR"
 
-      - name: Sign APKs
+      - name: Verify APK signature
         run: |
-          set -e
+          set -euo pipefail
           RELEASE_DIR="app/build/outputs/apk/release"
-          
-          echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > release.keystore
-          
-          APK_COUNT=$(find "$RELEASE_DIR" -name "app-*-release-unsigned.apk" -type f | wc -l)
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "No unsigned APK files found"
+          shopt -s nullglob
+          apks=("$RELEASE_DIR"/app-*-release.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "No signed APK files found"
             ls -lah "$RELEASE_DIR"
-            rm release.keystore
             exit 1
           fi
-          
-          find "$RELEASE_DIR" -name "app-*-release-unsigned.apk" -type f | while read -r apk; do
-            signed_apk="${apk/-unsigned/}"
-          
-            $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
-              --ks release.keystore \
-              --ks-key-alias "${{ secrets.SIGNING_KEY_ALIAS }}" \
-              --ks-pass "pass:${{ secrets.SIGNING_STORE_PASSWORD }}" \
-              --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
-              --out "$signed_apk" \
-              "$apk"
-          
-            $ANDROID_HOME/build-tools/34.0.0/apksigner verify "$signed_apk"
-            rm "$apk"
+          for apk in "${apks[@]}"; do
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk"
           done
-          
-          rm release.keystore
-          ls -lh "$RELEASE_DIR"/app-*-release.apk
+          ls -lh "${apks[@]}"
 
       - name: Copy build artifacts
         run: |
           set -euo pipefail
-          apks=("universal" "arm64-v8a" "armeabi-v7a" "x86" "x86_64")
-          for abi in "${apks[@]}"; do
-            src="app/build/outputs/apk/release/app-${abi}-release.apk"
+          RELEASE_DIR="app/build/outputs/apk/release"
+          shopt -s nullglob
+          apks=("$RELEASE_DIR"/app-*-release.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "No signed APK files found"
+            exit 1
+          fi
+          for src in "${apks[@]}"; do
+            abi="${src##*/app-}"
+            abi="${abi%-release.apk}"
             dst="mpvRex-${abi}-${VERSION_TAG}.apk"
-            if [ ! -f "$src" ]; then
-              echo "::error file=$src::Signed APK for $abi was not found"
-              exit 1
-            fi
             cp "$src" "$dst"
-            checksum=$(sha256sum "$dst" | awk '{ print $1 }')
+            checksum=$(sha256sum "$dst" | cut -d' ' -f1)
             varname="apk_${abi//-/_}_sha256"
             echo "$varname=$checksum" >> "$GITHUB_ENV"
           done
-          
           ls -lah mpvRex-*.apk
 
       - name: Create GitHub Release
@@ -110,16 +122,8 @@ jobs:
             | Variant | SHA-256 |
             | ------- | ------- |
             | arm64-v8a | ${{ env.apk_arm64_v8a_sha256 }} |
-            | armeabi-v7a | ${{ env.apk_armeabi_v7a_sha256 }} |
-            | Universal | ${{ env.apk_universal_sha256 }} |
-            | x86 | ${{ env.apk_x86_sha256 }} |
-            | x86_64 | ${{ env.apk_x86_64_sha256 }} |
           files: |
-            mpvRex-universal-${{ env.VERSION_TAG }}.apk
-            mpvRex-arm64-v8a-${{ env.VERSION_TAG }}.apk
-            mpvRex-armeabi-v7a-${{ env.VERSION_TAG }}.apk
-            mpvRex-x86-${{ env.VERSION_TAG }}.apk
-            mpvRex-x86_64-${{ env.VERSION_TAG }}.apk
+            mpvRex-*-${{ env.VERSION_TAG }}.apk
           draft: true
           prerelease: false
         env:
