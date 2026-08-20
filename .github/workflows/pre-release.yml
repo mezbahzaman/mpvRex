@@ -90,13 +90,6 @@ jobs:
           tag_name: ${{ env.VERSION_TAG }}
           name: ${{ env.RELEASE_NAME }}
           body: |
-            ### New feature
-            - Added Trakt scrobbling with browser-based OAuth authentication.
-            - Reports start, pause, resume, stop, and periodic playback progress to Trakt.
-            - Supports confidently identified movies and season/episode filenames, including IMDb IDs when present.
-
-            This is a debug pre-release intended for testing the new integration. Apps connected to the same Trakt account, including Stremio when Trakt integration is enabled there, can consume the reported watch state. Configure your Trakt API client ID and secret under **Settings > Extra Settings > Trakt Scrobbling**. The Trakt application redirect URI must be `mpvrex://trakt-callback`.
-
             The attached APK is signed with Android's debug certificate and uses the separate `xyz.mpv.rex.debug` application ID, so it can be installed alongside the release app.
 
             SHA-256 checksums are included in the attached `SHA256SUMS.txt` file.

@@ -71,9 +71,6 @@ import xyz.mpv.rex.utils.storage.FileTypeUtils
 import xyz.mpv.rex.utils.storage.FileFilterUtils
 import xyz.mpv.rex.repository.MediaFileRepository
 import xyz.mpv.rex.ui.player.SingleActionGesture
-import xyz.mpv.rex.trakt.ScrobbleManager
-import xyz.mpv.rex.trakt.ScrobbleMediaInfo
-import xyz.mpv.rex.utils.media.MediaInfoParser
 import com.github.k1rakishou.fsaf.FileManager
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
@@ -201,8 +198,6 @@ class PlayerActivity :
   private val thumbnailRepository: ThumbnailRepository by inject()
   private val uriThumbnailCache = android.util.LruCache<String, android.graphics.Bitmap>(32)
 
-  private val scrobbleManager: ScrobbleManager by inject()
-
   /**
    * Track selector for automatic audio/subtitle selection
    */
@@ -230,7 +225,9 @@ class PlayerActivity :
    */
   private var mediaIdentifier = ""
   private var legacyMediaIdentifier = ""
-  private var scrobbleSessionKey: Long? = null
+  private var returnResultSet = false
+  private var lastKnownPositionMs: Long? = null
+  private var lastKnownDurationMs: Long? = null
 
   /**
    * Helper for managing Picture-in-Picture mode.
@@ -873,6 +870,7 @@ class PlayerActivity :
 
   @RequiresApi(Build.VERSION_CODES.P)
   override fun finish() {
+    setReturnIntentOnce()
     runCatching {
       if (!isManualBackgroundPlayback) {
         isReady = false
@@ -888,10 +886,6 @@ class PlayerActivity :
         endBackgroundPlayback()
       }
       
-      setReturnIntent()
-
-      stopScrobble()
-
     }.onFailure { e ->
       Log.e(TAG, "Error during finish", e)
     }
@@ -901,6 +895,7 @@ class PlayerActivity :
 
   @RequiresApi(Build.VERSION_CODES.P)
   override fun finishAndRemoveTask() {
+    setReturnIntentOnce()
     runCatching {
       if (!isManualBackgroundPlayback) {
         isReady = false
@@ -917,10 +912,6 @@ class PlayerActivity :
         endBackgroundPlayback()
       }
       
-      setReturnIntent()
-
-      stopScrobble()
-
     }.onFailure { e ->
       Log.e(TAG, "Error during finishAndRemoveTask", e)
     }
@@ -1220,6 +1211,7 @@ class PlayerActivity :
 
     StremioHandoff.positionMs(extras)?.let {
       intentPositionMs = it
+      lastKnownPositionMs = it
       MPVLib.setPropertyDouble("time-pos", intentPositionMs.toDouble() / MILLISECONDS_TO_SECONDS)
     }
     Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs")
@@ -1343,79 +1335,6 @@ class PlayerActivity :
       }
     }
     return false
-  }
-
-  // ==================== MDBList Scrobbling ====================
-
-  private fun calculateScrobbleProgress(): Double {
-    val pos = viewModel.pos ?: return 0.0
-    val dur = viewModel.duration ?: return 0.0
-    if (dur <= 0) return 0.0
-    return (pos.toDouble() / dur.toDouble() * 100.0).coerceIn(0.0, 100.0)
-  }
-
-  private fun extractScrobbleMediaInfo(): ScrobbleMediaInfo? {
-    val title = viewModel.currentMediaTitle.ifBlank {
-      runCatching { MPVLib.getPropertyString("media-title") }.getOrNull() ?: ""
-    }
-    if (title.isBlank()) return null
-
-    val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull() ?: ""
-    val imdbId = Regex("""(?i)\btt\d{7,10}\b""")
-      .find("$path $title")
-      ?.value
-      ?.lowercase()
-
-    val parsed = MediaInfoParser.parse(title)
-    val year = parsed.year?.toIntOrNull()
-    val isEpisode = parsed.season != null && parsed.episode != null
-    if (!isEpisode && imdbId == null && year == null) return null
-
-    return ScrobbleMediaInfo(
-      title = parsed.title.ifBlank { title.substringBeforeLast(".") },
-      year = year,
-      imdbId = imdbId,
-      tmdbId = null,
-      season = parsed.season,
-      episode = parsed.episode,
-    )
-  }
-
-  private fun startScrobble() {
-    if (!scrobbleManager.isEnabled()) return
-    val mediaInfo = extractScrobbleMediaInfo() ?: return
-    val sessionKey = scrobbleManager.newSessionKey()
-    scrobbleSessionKey = sessionKey
-    val progress = calculateScrobbleProgress()
-    lifecycleScope.launch(Dispatchers.IO) {
-      scrobbleManager.onStart(sessionKey, mediaInfo, progress, ::calculateScrobbleProgress)
-    }
-  }
-
-  private fun pauseScrobble() {
-    if (!scrobbleManager.isEnabled()) return
-    val sessionKey = scrobbleSessionKey ?: return
-    val progress = calculateScrobbleProgress()
-    lifecycleScope.launch(Dispatchers.IO) {
-      scrobbleManager.onPause(sessionKey, progress)
-    }
-  }
-
-  private fun resumeScrobble() {
-    if (!scrobbleManager.isEnabled()) return
-    val sessionKey = scrobbleSessionKey ?: return
-    val progress = calculateScrobbleProgress()
-    lifecycleScope.launch(Dispatchers.IO) {
-      scrobbleManager.onResume(sessionKey, progress)
-    }
-  }
-
-  private fun stopScrobble() {
-    if (!scrobbleManager.isEnabled()) return
-    val sessionKey = scrobbleSessionKey ?: return
-    scrobbleSessionKey = null
-    val progress = calculateScrobbleProgress()
-    scrobbleManager.stopAsync(sessionKey, progress)
   }
 
   private fun isStremioHandoff(intent: Intent): Boolean {
@@ -1845,6 +1764,8 @@ class PlayerActivity :
     value: Long,
   ) {
     when (property) {
+      "time-pos" -> lastKnownPositionMs = StremioHandoff.secondsToMilliseconds(value.toDouble())
+      "duration" -> lastKnownDurationMs = StremioHandoff.secondsToMilliseconds(value.toDouble())
       "video-params/w",
       "video-params/h" -> {
         // Safety check: don't access MPV during cleanup
@@ -1881,7 +1802,6 @@ class PlayerActivity :
     when (property) {
       "pause" -> {
         handlePauseStateChange(value)
-        if (value) pauseScrobble() else resumeScrobble()
         // Ensure isReady is set when playback starts
         if (!value && !isReady) {
           isReady = true
@@ -1922,13 +1842,10 @@ class PlayerActivity :
     if (isEof) {
       // Save state immediately when EOF is reached
       saveVideoPlaybackState(fileName)
-      stopScrobble()
-
       // Check if we should repeat the current file
       if (viewModel.shouldRepeatCurrentFile()) {
         MPVLib.command("seek", "0", "absolute")
         viewModel.unpause()
-        startScrobble()
         return
       }
 
@@ -2108,6 +2025,7 @@ class PlayerActivity :
     // Update VM and services with exact loaded duration
     val loadedDurationSec = MPVLib.getPropertyDouble("duration") ?: 0.0
     if (loadedDurationSec > 0.0) {
+      lastKnownDurationMs = StremioHandoff.secondsToMilliseconds(loadedDurationSec)
       viewModel.onFileLoaded(loadedDurationSec)
       val loadedDurationMs = (loadedDurationSec * 1000).toLong()
       miniPlayerStateManager.updateState(durationMs = loadedDurationMs)
@@ -2333,7 +2251,6 @@ class PlayerActivity :
     // Asynchronously fetch better filename from HTTP headers for network streams
     fetchNetworkStreamTitle()
 
-    startScrobble()
   }
 
   /**
@@ -2391,8 +2308,6 @@ class PlayerActivity :
           withContext(Dispatchers.Main) {
             safeSetPropertyString("force-media-title", fileName)
             viewModel.setMediaTitle(fileName)
-            if (scrobbleSessionKey == null) startScrobble()
-
             // Update media session
             val durationMs = (MPVLib.getPropertyDouble("duration")?.times(1000))?.toLong() ?: 0L
             updateMediaSessionMetadata(
@@ -2746,9 +2661,26 @@ class PlayerActivity :
    * Sets the result intent with current playback position and duration.
    * Called when activity is finishing to return data to caller.
    */
-  private fun setReturnIntent() {
-    Log.d(TAG, "Setting external-player return intent")
-    setResult(RESULT_OK, StremioHandoff.resultIntent(viewModel.pos, viewModel.duration))
+  private fun setReturnIntentOnce() {
+    if (returnResultSet) return
+
+    val livePositionMs = runCatching {
+      StremioHandoff.secondsToMilliseconds(MPVLib.getPropertyDouble("time-pos"))
+    }.getOrNull()
+    val liveDurationMs = runCatching {
+      StremioHandoff.secondsToMilliseconds(MPVLib.getPropertyDouble("duration"))
+    }.getOrNull()
+    val positionMs = livePositionMs
+      ?: lastKnownPositionMs
+      ?: viewModel.pos?.toLong()?.times(MILLISECONDS_TO_SECONDS)
+      ?: intentPositionMs.takeIf { it != POSITION_NOT_SET.toLong() }
+    val durationMs = liveDurationMs
+      ?: lastKnownDurationMs
+      ?: viewModel.duration?.toLong()?.times(MILLISECONDS_TO_SECONDS)
+
+    Log.d(TAG, "Setting external-player result: position=${positionMs}ms duration=${durationMs}ms")
+    setResult(RESULT_OK, StremioHandoff.resultIntent(positionMs, durationMs))
+    returnResultSet = true
   }
 
   /**
@@ -4315,6 +4247,14 @@ class PlayerActivity :
           activity.finish()
         }
       }
+    }
+
+    fun closeActivePlayback(): Boolean {
+      val activity = activeInstance ?: return false
+      if (activity.isFinishing || activity.isDestroyed || !activity.mpvInitialized) return false
+      activity.isUserFinishing = true
+      activity.finish()
+      return true
     }
   }
 }

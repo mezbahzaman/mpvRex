@@ -30,10 +30,24 @@ class StremioHandoffTest {
   }
 
   @Test
-  fun resultUsesOriginalIntMillisecondContract() {
-    val result = StremioHandoff.result(positionSeconds = 125, durationSeconds = 3600)
+  fun resultPreservesPreciseIntMillisecondContract() {
+    val result = StremioHandoff.result(positionMs = 125_750L, durationMs = 3_600_250L)
 
-    assertEquals(125_000, result.positionMs)
-    assertEquals(3_600_000, result.durationMs)
+    assertEquals(125_750, result.positionMs)
+    assertEquals(3_600_250, result.durationMs)
+  }
+
+  @Test
+  fun resultRejectsNegativeValuesAndClampsIntOverflow() {
+    val result = StremioHandoff.result(positionMs = -1L, durationMs = Long.MAX_VALUE)
+
+    assertNull(result.positionMs)
+    assertEquals(Int.MAX_VALUE, result.durationMs)
+  }
+
+  @Test
+  fun secondsAreConvertedWithoutLosingSubSecondPrecision() {
+    assertEquals(125_750L, StremioHandoff.secondsToMilliseconds(125.75))
+    assertNull(StremioHandoff.secondsToMilliseconds(Double.NaN))
   }
 }

@@ -35,15 +35,21 @@ internal object StremioHandoff {
     else -> null
   }?.takeIf { it >= 0 }
 
-  /** Preserve the original external-player result contract: Int milliseconds. */
-  fun result(positionSeconds: Int?, durationSeconds: Int?) = ExternalPlayerResult(
-    positionMs = positionSeconds?.times(1000),
-    durationMs = durationSeconds?.times(1000),
+  /** Preserve Stremio's original Bundle type while accepting precise millisecond snapshots. */
+  fun result(positionMs: Long?, durationMs: Long?) = ExternalPlayerResult(
+    positionMs = compatibleMilliseconds(positionMs),
+    durationMs = compatibleMilliseconds(durationMs),
   )
 
-  fun resultIntent(positionSeconds: Int?, durationSeconds: Int?): Intent = Intent(RESULT_ACTION).apply {
-    val result = result(positionSeconds, durationSeconds)
+  fun resultIntent(positionMs: Long?, durationMs: Long?): Intent = Intent(RESULT_ACTION).apply {
+    val result = result(positionMs, durationMs)
     result.positionMs?.let { putExtra(POSITION_EXTRA, it) }
     result.durationMs?.let { putExtra(DURATION_EXTRA, it) }
   }
+
+  internal fun secondsToMilliseconds(value: Double?): Long? =
+    value?.takeIf { it.isFinite() && it >= 0.0 }?.times(1000.0)?.toLong()
+
+  private fun compatibleMilliseconds(value: Long?): Int? =
+    value?.takeIf { it >= 0L }?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt()
 }

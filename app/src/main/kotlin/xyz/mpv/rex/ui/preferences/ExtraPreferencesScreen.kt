@@ -11,10 +11,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -48,8 +46,6 @@ import xyz.mpv.rex.R
 import xyz.mpv.rex.preferences.ExtraPreferences
 import xyz.mpv.rex.preferences.preference.collectAsState
 import xyz.mpv.rex.presentation.Screen
-import xyz.mpv.rex.trakt.MdbListPreferences
-import xyz.mpv.rex.trakt.ScrobbleManager
 import xyz.mpv.rex.ui.preferences.components.SwitchPreference
 import xyz.mpv.rex.ui.utils.LocalBackStack
 import xyz.mpv.rex.utils.media.OpenDocumentTreeContract
@@ -62,8 +58,6 @@ object ExtraPreferencesScreen : Screen {
     val context = LocalContext.current
     val backStack = LocalBackStack.current
     val preferences = koinInject<ExtraPreferences>()
-    val mdbListPreferences = koinInject<MdbListPreferences>()
-    val scrobbleManager = koinInject<ScrobbleManager>()
     val autoStremioSubtitles by preferences.autoStremioSubtitles.collectAsState()
     val maximumBufferedSeconds by preferences.maximumBufferedSeconds.collectAsState()
     val maximumNetworkDownloadMiB by preferences.maximumNetworkDownloadMiB.collectAsState()
@@ -72,15 +66,8 @@ object ExtraPreferencesScreen : Screen {
     val autoLocalSubtitles by preferences.autoLocalSubtitles.collectAsState()
     val excludedFolders by preferences.localSubtitleExcludedFolders.collectAsState()
 
-    val mdbEnabled by mdbListPreferences.enabled.collectAsState()
-    val mdbApiKey by mdbListPreferences.apiKey.collectAsState()
-    val mdbUsername by mdbListPreferences.username.collectAsState()
-    val isConnected = mdbApiKey.isNotBlank()
-
     var numberDialog by remember { mutableStateOf<NumberSetting?>(null) }
     var showPingHostDialog by remember { mutableStateOf(false) }
-    var showApiKeyDialog by remember { mutableStateOf(false) }
-    var showDisconnectDialog by remember { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(OpenDocumentTreeContract()) { uri ->
       if (uri != null) {
@@ -114,37 +101,6 @@ object ExtraPreferencesScreen : Screen {
         },
       )
     }
-    if (showApiKeyDialog) {
-      ValidatedTextDialog(
-        title = stringResource(R.string.pref_mdblist_client_id_title),
-        initialValue = mdbApiKey,
-        isSecret = true,
-        onDismiss = { showApiKeyDialog = false },
-        onSave = {
-          mdbListPreferences.apiKey.set(it)
-          showApiKeyDialog = false
-        },
-      )
-    }
-    if (showDisconnectDialog) {
-      AlertDialog(
-        onDismissRequest = { showDisconnectDialog = false },
-        title = { Text(stringResource(R.string.pref_mdblist_disconnect_confirm_title)) },
-        text = { Text(stringResource(R.string.pref_mdblist_disconnect_confirm_message)) },
-        confirmButton = {
-          TextButton(onClick = {
-            scrobbleManager.logout()
-            showDisconnectDialog = false
-          }) { Text(stringResource(R.string.generic_ok)) }
-        },
-        dismissButton = {
-          TextButton(onClick = { showDisconnectDialog = false }) {
-            Text(stringResource(R.string.generic_cancel))
-          }
-        },
-      )
-    }
-
     Scaffold(
       topBar = {
         TopAppBar(
@@ -288,52 +244,6 @@ object ExtraPreferencesScreen : Screen {
                     }
                   }
                 }
-              }
-            }
-          }
-
-          item { PreferenceSectionHeader(stringResource(R.string.pref_mdblist_section)) }
-          item {
-            PreferenceCard {
-              SwitchPreference(
-                value = mdbEnabled,
-                onValueChange = {
-                  mdbListPreferences.enabled.set(it)
-                  if (!it) {
-                    scrobbleManager.destroy()
-                  }
-                },
-                title = { Text(stringResource(R.string.pref_mdblist_enable_title)) },
-                summary = { Text(stringResource(R.string.pref_mdblist_enable_summary)) },
-              )
-              PreferenceDivider()
-              ValuePreference(
-                title = stringResource(R.string.pref_mdblist_client_id_title),
-                summary = if (isConnected) "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else stringResource(R.string.pref_mdblist_client_id_summary),
-                onClick = { showApiKeyDialog = true },
-              )
-              PreferenceDivider()
-              if (isConnected) {
-                Preference(
-                  title = {
-                    Text(
-                      stringResource(R.string.pref_mdblist_connected_as, mdbUsername.ifBlank { "MDBList user" })
-                    )
-                  },
-                  icon = { Icon(Icons.Outlined.Check, contentDescription = null) },
-                )
-                PreferenceDivider()
-                Preference(
-                  title = { Text(stringResource(R.string.pref_mdblist_disconnect)) },
-                  icon = { Icon(Icons.Outlined.LinkOff, contentDescription = null) },
-                  onClick = { showDisconnectDialog = true },
-                )
-              } else {
-                Preference(
-                  title = { Text(stringResource(R.string.pref_mdblist_authenticate_title)) },
-                  summary = { Text(stringResource(R.string.pref_mdblist_authenticate_summary)) },
-                  onClick = { showApiKeyDialog = true },
-                )
               }
             }
           }

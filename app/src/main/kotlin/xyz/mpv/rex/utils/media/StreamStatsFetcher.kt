@@ -32,7 +32,10 @@ data class StreamStats(
   val seeds: Int = 0,
   val peers: Int = 0,
   val swarmSeeds: Int? = null,
-  val pingMs: Int = 0,
+  val pingMs: Int? = null,
+  val pingTarget: String = "",
+  val protocol: String = "",
+  val host: String = "",
   val speedBytesPerSec: Long = 0,
 )
 
@@ -52,30 +55,30 @@ object StreamStatsFetcher {
   private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
   private val PING_TIME_REGEX = Regex("time[=<]([0-9]+(?:\\.[0-9]+)?)\\s*ms", RegexOption.IGNORE_CASE)
 
-  /** Returns ICMP latency to the configured host, or 0 when the probe times out/fails. */
-  fun fetchPingMs(host: String = "google.com"): Int {
+  /** Returns ICMP latency to the configured host, or null when the probe times out/fails. */
+  fun fetchPingMs(host: String = "google.com"): Int? {
     val target = host.trim().takeIf { it.isNotEmpty() && it.none(Char::isWhitespace) } ?: "google.com"
     var process: Process? = null
     return try {
-      process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "2", target)
+      process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "1", target)
         .redirectErrorStream(true)
         .start()
-      if (!process.waitFor(3, TimeUnit.SECONDS)) {
+      if (!process.waitFor(1500, TimeUnit.MILLISECONDS)) {
         process.destroyForcibly()
-        return 0
+        return null
       }
       val output = process.inputStream.bufferedReader().use { it.readText() }
       parsePingMs(output)
     } catch (_: Exception) {
-      0
+      null
     } finally {
       process?.destroy()
     }
   }
 
-  internal fun parsePingMs(output: String): Int =
+  internal fun parsePingMs(output: String): Int? =
     PING_TIME_REGEX.find(output)?.groupValues?.getOrNull(1)
-      ?.toDoubleOrNull()?.toInt()?.coerceAtLeast(1) ?: 0
+      ?.toDoubleOrNull()?.toInt()?.coerceAtLeast(1)
 
   /**
    * Detects a Stremio torrent URL. The infoHash is the first path segment
@@ -91,7 +94,7 @@ object StreamStatsFetcher {
   fun buildStatsUrl(streamUrl: String, infoHash: String): String? {
     val base = runCatching {
       val uri = Uri.parse(streamUrl)
-      val scheme = uri.scheme ?: return null
+       val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
       val host = uri.host ?: return null
       "$scheme://$host${if (uri.port >= 0) ":${uri.port}" else ""}"
     }.getOrNull() ?: return null
@@ -119,11 +122,12 @@ object StreamStatsFetcher {
           val wires = json.optJSONArray("wires")
           val hasWireData = (wires?.length() ?: 0) > 0
           TorrentStats(
-            downloadSpeed = (json.optDouble("downloadSpeed", 0.0)).toLong(),
+            downloadSpeed = json.optDouble("downloadSpeed", 0.0).takeIf { it.isFinite() }
+              ?.toLong()?.coerceAtLeast(0L) ?: 0L,
             // `swarmSize` is a constant tracker total (not seeders). Only
             // actually-connected peers expose a seeder flag, so count those.
             seeds = if (hasWireData) countSeeders(json) else 0,
-            peers = json.optInt("peers", 0),
+            peers = json.optInt("peers", 0).coerceAtLeast(0),
             hasWireData = hasWireData,
             trackerUrls = trackerUrls(json),
           )
@@ -277,8 +281,12 @@ object StreamStatsFetcher {
   }
 
   internal fun normalizeTrackerUrls(values: List<String>): List<String> =
-    values.map { it.removePrefix("tracker:") }
-      .filter { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("udp://") }
+    values.map { it.trim().removePrefix("tracker:").trim() }
+      .filter {
+        it.startsWith("http://", ignoreCase = true) ||
+          it.startsWith("https://", ignoreCase = true) ||
+          it.startsWith("udp://", ignoreCase = true)
+      }
       .distinct()
 
   private fun countSeeders(json: JSONObject): Int {

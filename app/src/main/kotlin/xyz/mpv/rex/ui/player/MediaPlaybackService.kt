@@ -569,10 +569,11 @@ class MediaPlaybackService :
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
-    Log.d(TAG, "Task removed - killing playback and cleaning up service")
+    Log.d(TAG, "Task removed - closing playback and cleaning up service")
     try {
-      // Kill MPV playback immediately when task is removed
-      try {
+      // Let the activity return its final position before MPV is stopped.
+      val activityClosed = PlayerActivity.closeActivePlayback()
+      if (!activityClosed) try {
         MPVLib.command("quit")
         Log.d(TAG, "MPV quit command sent")
       } catch (e: Exception) {
@@ -604,13 +605,8 @@ class MediaPlaybackService :
       
       // Stop the service which will trigger cleanup
       stopSelf()
-      
-      // Force kill the process to ensure everything stops
-      android.os.Process.killProcess(android.os.Process.myPid())
     } catch (e: Exception) {
       Log.e(TAG, "Error in onTaskRemoved", e)
-      // Force kill even if there's an error
-      android.os.Process.killProcess(android.os.Process.myPid())
     }
     super.onTaskRemoved(rootIntent)
   }

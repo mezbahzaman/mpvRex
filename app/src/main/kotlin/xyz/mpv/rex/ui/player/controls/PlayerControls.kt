@@ -228,6 +228,8 @@ fun PlayerControls(
   var isCloseToStart by remember { mutableStateOf(false) }
   var changeCount by remember { mutableStateOf(0) }
   var pendingNetworkSeek by remember { mutableStateOf<Float?>(null) }
+  var settlingSeekTarget by remember(mediaPath) { mutableStateOf<Float?>(null) }
+  var cacheSnapshotAtSeek by remember(mediaPath) { mutableStateOf<List<Float?>>(emptyList()) }
   var resetControlsTimestamp by remember { mutableStateOf(0L) }
   val seekText by viewModel.seekText.collectAsState()
   val currentChapter by MPVLib.propInt["chapter"].collectAsState()
@@ -252,6 +254,22 @@ fun PlayerControls(
 
   val isGestureSeeking by viewModel.isGestureSeeking.collectAsState()
   val isVerticalGestureActive by viewModel.isVerticalGestureActive.collectAsState()
+
+  LaunchedEffect(demuxerCacheEnd, demuxerCacheDuration, precisePosition, settlingSeekTarget) {
+    val target = settlingSeekTarget ?: return@LaunchedEffect
+    val cacheChanged = cacheSnapshotAtSeek != listOf(demuxerCacheEnd, demuxerCacheDuration)
+    if (cacheChanged && abs(precisePosition - target) <= 2f) {
+      settlingSeekTarget = null
+      cacheSnapshotAtSeek = emptyList()
+    }
+  }
+
+  LaunchedEffect(settlingSeekTarget) {
+    if (settlingSeekTarget == null) return@LaunchedEffect
+    delay(SEEK_BUFFER_SETTLE_TIMEOUT_MS)
+    settlingSeekTarget = null
+    cacheSnapshotAtSeek = emptyList()
+  }
 
   LaunchedEffect(controlsShown) {
     if (controlsShown) {
@@ -1295,19 +1313,15 @@ fun PlayerControls(
           val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
           val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
           val isNetworkMedia = streamStats.isNetwork || mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
-          val cacheEnd = demuxerCacheEnd?.takeIf { it.isFinite() && it >= currentPos }
-            ?: demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPos }
-            ?: demuxerCacheDuration
-              ?.takeIf { it.isFinite() && it > 0.1f }
-              ?.let { currentPos + it }
-            ?: streamStats.bufferedSeconds
-              .takeIf { it.isFinite() && it > 0.1f }
-              ?.let { currentPos + it }
-          val readAheadPosition = if (isNetworkMedia) {
-            maxOf(currentPos, cacheEnd ?: currentPos).coerceAtMost(totalDuration)
-          } else {
-            currentPos.coerceAtMost(totalDuration)
-          }
+          val readAheadPosition = bufferedEndPosition(
+            currentPosition = currentPos,
+            duration = totalDuration,
+            isNetworkMedia = isNetworkMedia,
+            bufferInvalidated = isSeeking || pendingNetworkSeek != null || settlingSeekTarget != null,
+            cacheEnd = demuxerCacheEnd,
+            cacheDuration = demuxerCacheDuration,
+            bufferedSeconds = streamStats.bufferedSeconds,
+          )
 
           SeekbarWithTimers(
             position = { precisePosition },
@@ -1342,6 +1356,14 @@ fun PlayerControls(
               viewModel.autoHideControls()
             },
             onValueChangeFinished = {
+              val seekTarget = pendingNetworkSeek
+              if (!isCloseToStart && isNetworkMedia && seekTarget != null) {
+                settlingSeekTarget = seekTarget
+                cacheSnapshotAtSeek = listOf(demuxerCacheEnd, demuxerCacheDuration)
+              } else if (isCloseToStart) {
+                settlingSeekTarget = null
+                cacheSnapshotAtSeek = emptyList()
+              }
               if (isCloseToStart) {
                 viewModel.seekTo(dragStartValue.toInt())
                 viewModel.playerUpdate.value = PlayerUpdates.None
@@ -1967,10 +1989,13 @@ fun PlayerControls(
   }
 }
 
+private const val SEEK_BUFFER_SETTLE_TIMEOUT_MS = 3_000L
+
 @Composable
 private fun StreamInfoOverlayContent(streamStats: StreamStats) {
   val bufferedSeconds = streamStats.bufferedSeconds.toInt().coerceAtLeast(0)
   val speedText = StreamStatsFetcher.formatSpeed(streamStats.speedBytesPerSec)
+  val pingText = streamStats.pingMs?.let { "$it ms" } ?: "--"
 
   Row(
     verticalAlignment = Alignment.CenterVertically,
@@ -1992,6 +2017,7 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
         style = MaterialTheme.typography.bodyMedium,
       )
     } else {
+      val details = listOf(streamStats.protocol, streamStats.host).filter { it.isNotBlank() }.joinToString("  ")
       val line =
         if (streamStats.isTorrent) {
           val swarmSeeds = streamStats.swarmSeeds
@@ -2002,7 +2028,7 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
               streamStats.seeds,
               streamStats.peers,
               swarmSeeds,
-              streamStats.pingMs,
+              pingText,
               speedText,
             )
           } else {
@@ -2011,20 +2037,28 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
               bufferedSeconds,
               streamStats.seeds,
               streamStats.peers,
-              streamStats.pingMs,
+              pingText,
               speedText,
             )
           }
         } else {
-          stringResource(R.string.stream_stats_line_http, bufferedSeconds, streamStats.pingMs, speedText)
+          stringResource(R.string.stream_stats_line_http, bufferedSeconds, pingText, speedText)
         }
-      Text(
-        text = line,
-        color = Color.White.copy(alpha = 0.95f),
-        style = MaterialTheme.typography.bodyMedium,
-        fontWeight = FontWeight.Medium,
-        maxLines = 1,
-      )
+      Column {
+        Text(
+          text = details,
+          color = Color.White.copy(alpha = 0.72f),
+          style = MaterialTheme.typography.labelSmall,
+          maxLines = 1,
+        )
+        Text(
+          text = line,
+          color = Color.White.copy(alpha = 0.95f),
+          style = MaterialTheme.typography.bodyMedium,
+          fontWeight = FontWeight.Medium,
+          maxLines = 2,
+        )
+      }
     }
   }
 }

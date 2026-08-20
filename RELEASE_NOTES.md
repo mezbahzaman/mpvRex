@@ -1,4 +1,23 @@
-# mpvRex Stremio Edition 4.5.12
+# mpvRex Stremio Edition 4.5.13
+
+## Fixed
+
+- Return precise, latest playback position and duration to Stremio when closing movies or episodes.
+- Preserve stream-buffer visualization across seeks without displaying stale pre-seek cache ranges.
+- Refresh network ping independently every second and distinguish unavailable results from `0 ms`.
+- Harden P2P statistics classification, polling cancellation, and metric parsing.
+- Remove stale Trakt/MDBList scrobbling integration and its Extra Settings controls.
+
+## Changed
+
+- Stream details now show protocol and host information and use a compact two-line layout.
+- Task removal no longer force-kills the process before playback progress can be returned.
+
+## Added
+
+- Added focused tests for precise Stremio result values, stream URL validation, and seekbar buffer ranges.
+
+## Previous Release
 
 ## Fixed
 

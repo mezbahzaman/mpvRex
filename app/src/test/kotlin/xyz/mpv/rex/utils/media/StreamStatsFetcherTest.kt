@@ -1,6 +1,7 @@
 package xyz.mpv.rex.utils.media
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class StreamStatsFetcherTest {
@@ -26,6 +27,16 @@ class StreamStatsFetcherTest {
   fun parsesPingLatencyAndFailure() {
     assertEquals(50, StreamStatsFetcher.parsePingMs("64 bytes from host: time=50.7 ms"))
     assertEquals(1, StreamStatsFetcher.parsePingMs("64 bytes from host: time<1 ms"))
-    assertEquals(0, StreamStatsFetcher.parsePingMs("100% packet loss"))
+    assertNull(StreamStatsFetcher.parsePingMs("100% packet loss"))
+  }
+
+  @Test
+  fun statsUrlOnlySupportsHttpServers() {
+    val hash = "0123456789abcdef0123456789abcdef01234567"
+    assertEquals(
+      "http://127.0.0.1:11470/$hash/stats.json",
+      StreamStatsFetcher.buildStatsUrl("http://127.0.0.1:11470/$hash/video.mkv", hash),
+    )
+    assertNull(StreamStatsFetcher.buildStatsUrl("ftp://example.com/$hash/video.mkv", hash))
   }
 }
