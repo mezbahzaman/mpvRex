@@ -199,6 +199,12 @@ fun PlayerControls(
   val duration by MPVLib.propInt["duration"].collectAsState()
   val position by MPVLib.propInt["time-pos"].collectAsState()
   val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
+  // Absolute timestamp (in seconds) of the last packet held in the demuxer
+  // cache — i.e. the real end position of what is buffered ahead. Using this
+  // absolute value (instead of currentPos + cacheDuration) keeps the seekbar's
+  // buffer indicator correct the instant the user seeks, because it does not mix
+  // a freshly-updated play position with a still-stale relative cache length.
+  val demuxerCacheTime by MPVLib.propFloat["demuxer-cache-time"].collectAsState()
   val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
   val mediaPath by MPVLib.propString["path"].collectAsState()
   val precisePosition by viewModel.precisePosition.collectAsState()
@@ -1260,12 +1266,11 @@ fun PlayerControls(
           val invertDuration by playerPreferences.invertDuration.collectAsState()
           val seekbarStyle by appearancePreferences.seekbarStyle.collectAsState()
 
-          // Calculate read-ahead position (current position + buffered cache time)
-          // No keys for remember, derivedStateOf reactively tracks read dependencies
+          // Calculate the read-ahead (buffered) end position shown on the seekbar.
+          // No keys for remember; derivedStateOf reactively tracks read dependencies.
           val readAheadPosition by remember {
             derivedStateOf {
               val currentPos = position?.toFloat() ?: 0f
-              val cacheDuration = demuxerCacheDuration ?: 0f
               val totalDuration = if (preciseDuration > 0) preciseDuration else duration?.toFloat() ?: 0f
 
               // Media opened from disk (or a content/file URI) is always read
@@ -1274,19 +1279,33 @@ fun PlayerControls(
               val mediaScheme = mediaPath?.substringBefore("://")?.lowercase()
               val isNetworkMedia = mediaScheme != null && mediaScheme in NETWORK_STREAM_SCHEMES
 
-              if (!isNetworkMedia) {
-                // Local file: no buffered-content indicator.
-                currentPos.coerceAtMost(totalDuration)
-              } else {
-                // Network stream: show the REAL amount buffered by the demuxer
-                // cache, and nothing else. While (re)buffering the cache is
-                // depleted, so there is nothing playable ahead of the current
-                // position yet — hide the indicator instead of fabricating a
-                // fake buffer that looked like progress while the stream stalled.
-                if (cacheDuration > 0.1f) {
-                  (currentPos + cacheDuration).coerceAtMost(totalDuration)
-                } else {
+              when {
+                !isNetworkMedia -> {
+                  // Local file: no buffered-content indicator.
                   currentPos.coerceAtMost(totalDuration)
+                }
+                // While the user is actively scrubbing, the demuxer cache still
+                // describes the OLD playback region for a moment. Mixing that
+                // stale cache with the new drag position produced a fake buffer
+                // bar that "snapped back" a second later. Suppress the indicator
+                // during the seek so nothing misleading is drawn; it reappears
+                // accurately once playback settles at the new position.
+                isSeeking -> currentPos.coerceAtMost(totalDuration)
+                else -> {
+                  // Prefer mpv's absolute buffered-end timestamp
+                  // (demuxer-cache-time). It is the real end position of the
+                  // buffered range and never has to be added to the play head,
+                  // so it stays correct the instant the position changes.
+                  val cacheEnd = demuxerCacheTime ?: -1f
+                  val cacheDuration = demuxerCacheDuration ?: 0f
+                  val bufferedEnd = when {
+                    cacheEnd > currentPos -> cacheEnd
+                    // Fallback for builds where demuxer-cache-time is unavailable:
+                    // only trust a positive relative cache length.
+                    cacheDuration > 0.1f -> currentPos + cacheDuration
+                    else -> currentPos
+                  }
+                  bufferedEnd.coerceIn(currentPos, totalDuration)
                 }
               }
             }

@@ -2614,24 +2614,27 @@ class PlayerActivity :
     }
   }
 
-  /**
-   * Saves the currently playing file to recently played history.
-   *
-   * Handles various URI schemes and infers launch source.
-   */
   // ==================== Intent and Result Management ====================
 
   /**
    * Sets the result intent with current playback position and duration.
    * Called when activity is finishing to return data to caller.
+   *
+   * The position/duration reported to an external launcher (e.g. Stremio's
+   * "Continue Watching") is resolved via the ViewModel's last-known-good
+   * resolver, which prefers a fresh live MPV read and falls back to the most
+   * recent valid cached value. This guarantees the resume point is handed back
+   * even when the collected state flows momentarily read null during teardown.
    */
   private fun setReturnIntent() {
-    Log.d(TAG, "Setting return intent")
+    val positionSec = viewModel.resolveReportPositionSec()
+    val durationSec = viewModel.resolveReportDurationSec()
+    Log.d(TAG, "Setting return intent: position=${positionSec}s duration=${durationSec}s")
 
     val resultIntent =
       Intent(RESULT_INTENT).apply {
-        viewModel.pos?.let { putExtra("position", it * MILLISECONDS_TO_SECONDS) }
-        viewModel.duration?.let { putExtra("duration", it * MILLISECONDS_TO_SECONDS) }
+        positionSec?.let { putExtra("position", it * MILLISECONDS_TO_SECONDS) }
+        durationSec?.let { putExtra("duration", it * MILLISECONDS_TO_SECONDS) }
       }
 
     setResult(RESULT_OK, resultIntent)
