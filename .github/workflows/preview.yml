@@ -87,22 +87,34 @@ jobs:
 
           declare -a apks=("universal" "arm64-v8a" "armeabi-v7a" "x86" "x86_64")
           mkdir -p output
-          
+
+          copied=0
           for arch in "${apks[@]}"; do
             src="app/build/outputs/apk/preview/app-${arch}-preview.apk"
             dest="output/mpvRex-preview-r${commit_count}-${arch}.apk"
-            
+
+            # The ABI splits config may only produce a subset of these variants
+            # (e.g. arm64-v8a only). Skip any variant that wasn't built instead
+            # of failing the whole job.
             if [ ! -f "$src" ]; then
-              echo "::error file=$src::Signed APK for $arch was not found"
-              exit 1
+              echo "::notice file=$src::APK for $arch was not built, skipping"
+              continue
             fi
-            
+
             cp "$src" "$dest"
-          
+            copied=$((copied + 1))
+
             # Get file size in human-readable format
             size=$(du -h "$dest" | cut -f1)
             echo "${arch}_size=$size" >> $GITHUB_OUTPUT
           done
+
+          if [ "$copied" -eq 0 ]; then
+            echo "::error::No signed preview APKs were found to copy"
+            ls -lah app/build/outputs/apk/preview/ || true
+            exit 1
+          fi
+          echo "Copied $copied signed APK(s) to output/"
 
       - name: Upload all artifacts
         uses: actions/upload-artifact@v4
