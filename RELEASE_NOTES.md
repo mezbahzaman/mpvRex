@@ -1,4 +1,12 @@
-# mpvRex Stremio Edition 4.5.17
+# mpvRex Stremio Edition 4.5.18
+
+## Fixed
+
+- Both HTTP and P2P stream information now show the device/network's public IP
+  and its country from ipwhois.io. HTTP streams no longer show the remote server
+  IP, so the identity line is consistent across both stream types.
+
+## Previous Release
 
 ## Fixed
 

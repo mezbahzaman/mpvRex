@@ -2363,9 +2363,9 @@ class PlayerViewModel(
   private var pingPollInFlight = false
   private var torrentStatsJob: Job? = null
   private var streamStatsGeneration = 0L
-  private var ipWhoisHost: String? = null
   private var ipWhoisDetails: IpWhoisDetails? = null
   private var ipWhoisLookupInFlight = false
+  private var ipWhoisLookupGeneration = -1L
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2646,9 +2646,9 @@ class PlayerViewModel(
       torrentStatsJob = null
       lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
       lastHttpSampleMs = SystemClock.elapsedRealtime()
-      ipWhoisHost = null
       ipWhoisDetails = null
       ipWhoisLookupInFlight = false
+      ipWhoisLookupGeneration = -1L
     }
     val isNetwork = path != null && StreamTuning.isNetworkUri(path)
     if (!isNetwork) {
@@ -2690,13 +2690,12 @@ class PlayerViewModel(
 
     val stats = if (infoHash != null) lastTorrentStats else null
     val isTorrent = infoHash != null
-    val streamHost = Uri.parse(path).host.orEmpty()
-    if (streamHost.isNotBlank() && streamHost != ipWhoisHost && !ipWhoisLookupInFlight) {
-      ipWhoisHost = streamHost
+    if (ipWhoisLookupGeneration != streamStatsGeneration && !ipWhoisLookupInFlight) {
+      ipWhoisLookupGeneration = streamStatsGeneration
       ipWhoisLookupInFlight = true
       val lookupGeneration = streamStatsGeneration
       viewModelScope.launch(Dispatchers.IO) {
-        val details = StreamStatsFetcher.fetchIpWhoisDetails(streamHost)
+        val details = StreamStatsFetcher.fetchIpWhoisDetails()
         if (streamStatsGeneration == lookupGeneration && lastStatsPath == path &&
           runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
           ipWhoisDetails = details
@@ -2707,8 +2706,8 @@ class PlayerViewModel(
               ipCountryFlag = details?.countryFlag.orEmpty(),
             ) else stats
           }
-          ipWhoisLookupInFlight = false
         }
+        if (streamStatsGeneration == lookupGeneration) ipWhoisLookupInFlight = false
       }
     }
 

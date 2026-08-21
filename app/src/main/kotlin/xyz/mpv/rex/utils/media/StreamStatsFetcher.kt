@@ -84,17 +84,11 @@ object StreamStatsFetcher {
     }
   }
 
-  /** Resolves a stream host and retrieves its country and flag from ipwhois.io. */
-  fun fetchIpWhoisDetails(host: String): IpWhoisDetails? {
-    val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return null
-    val ip = address.hostAddress?.takeIf { it.isNotBlank() } ?: return null
-    val lookupIp = ip.takeUnless {
-      address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress
-    }
+  /** Retrieves this device/network's public IP, country, and flag from ipwhois.io. */
+  fun fetchIpWhoisDetails(): IpWhoisDetails? {
     var connection: HttpURLConnection? = null
     return try {
-      val endpoint = "https://ipwho.is/${lookupIp.orEmpty()}?fields=ip,success,country,flag.emoji"
-      connection = URL(endpoint).openConnection() as HttpURLConnection
+      connection = URL("https://ipwho.is/?fields=ip,success,country,flag.emoji").openConnection() as HttpURLConnection
       connection.connectTimeout = STATS_TIMEOUT_MS
       connection.readTimeout = STATS_TIMEOUT_MS
       connection.requestMethod = "GET"
