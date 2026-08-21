@@ -793,7 +793,8 @@ class PlayerViewModel(
     }
   }
 
-  fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false) = _subtitleManager.addSubtitle(uri, select, silent)
+  fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false, automatic: Boolean = false) =
+    _subtitleManager.addSubtitle(uri, select, silent, automatic = automatic)
 
   private fun scanLocalSubtitles(mediaTitle: String) {
     viewModelScope.launch(Dispatchers.IO) {
@@ -819,7 +820,7 @@ class PlayerViewModel(
               if (file.isFile && isValid) {
                 withContext(Dispatchers.Main) {
                   // Don't auto-select during scan, just make available
-                  addSubtitle(file.uri, select = false, silent = true)
+                  addSubtitle(file.uri, select = false, silent = true, automatic = true)
                 }
               }
             }
@@ -2391,8 +2392,9 @@ class PlayerViewModel(
   /**
    * Checks once per second whether the currently playing Stremio stream needs
    * an online subtitle. Runs only for network streams handed off by Stremio,
-   * skips files that already have embedded subtitle tracks, and never retries
-   * the same path after a decision has been made.
+   * skips files that already have embedded subtitle tracks, never retries
+   * the same path after a decision has been made, and stays out of the way once
+   * the user has deleted a subtitle for the current media.
    */
   private suspend fun maybeAutoLoadSubtitles() {
     if (subtitlesPreferences.wyzieApiKey.get().isBlank()) return
@@ -2408,6 +2410,12 @@ class PlayerViewModel(
         isEligibleLocalAutoSubtitle(source, extraPreferences.localSubtitleExcludedFolders.get())
     }
     if (!enabledForSource) return
+    if (!_subtitleManager.allowsAutomaticSearch(path)) {
+      lastAutoSubPath = path
+      lastAutoSubAttemptMs = Long.MAX_VALUE
+      Log.d(TAG, "AutoSub: user deleted the subtitle for this media, not searching again")
+      return
+    }
     if (path != autoSubObservedPath) {
       autoSubObservedPath = path
       autoSubObservedAtMs = SystemClock.elapsedRealtime()
@@ -2608,7 +2616,7 @@ class PlayerViewModel(
         Log.d(TAG, "AutoSub: media changed, discarding downloaded subtitle")
         return
       }
-      _subtitleManager.addSubtitle(uri, select = true, silent = false, expectedMediaPath = path)
+      _subtitleManager.addSubtitle(uri, select = true, silent = false, expectedMediaPath = path, automatic = true)
       return
     }
     Log.d(TAG, "AutoSub: no subtitles found after ${candidates.size} title candidate(s)")

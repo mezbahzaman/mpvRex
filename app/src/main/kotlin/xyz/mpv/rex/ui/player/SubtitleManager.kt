@@ -76,17 +76,38 @@ class SubtitleManager(
 
     private val mpvPathToUriMap = mutableMapOf<String, String>()
 
+    /** Tracks subtitles the user deleted so automatic loading cannot re-add them. */
+    private val optOut = AutoSubtitleOptOut()
+
+    /** Reports whether an automatic online search is still wanted for [mediaPath]. */
+    fun allowsAutomaticSearch(mediaPath: String): Boolean = optOut.allowsAutomaticSearch(mediaPath)
+
     // ==================== Actions ====================
 
     fun toggleOnlineSection() {
         _isOnlineSectionExpanded.value = !_isOnlineSectionExpanded.value
     }
 
-    fun addSubtitle(uri: Uri, select: Boolean = true, silent: Boolean = false, expectedMediaPath: String? = null) {
+    fun addSubtitle(
+        uri: Uri,
+        select: Boolean = true,
+        silent: Boolean = false,
+        expectedMediaPath: String? = null,
+        automatic: Boolean = false,
+    ) {
         val uriString = uri.toString()
         if (_externalSubtitles.contains(uriString)) {
             Log.d(TAG, "Subtitle already tracked, skipping: $uriString")
             return
+        }
+        val currentMediaPath = expectedMediaPath ?: runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+        if (automatic && !optOut.allowsAutomaticSubtitle(uriString, currentMediaPath)) {
+            Log.d(TAG, "Subtitle was deleted by the user, not loading it again: $uriString")
+            return
+        }
+        if (!automatic) {
+            // An explicit pick overrides an earlier deletion of the same subtitle.
+            optOut.markChosenByUser(uriString, currentMediaPath)
         }
 
         val fileName = uri.lastPathSegment ?: "subtitle"
@@ -112,6 +133,13 @@ class SubtitleManager(
                 if (expectedMediaPath != null && MPVLib.getPropertyString("path") != expectedMediaPath) return@runCatching
                 val mpvPath = uri.resolveUri(context) ?: uri.toString()
                 if (expectedMediaPath != null && MPVLib.getPropertyString("path") != expectedMediaPath) return@runCatching
+                val mediaPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+                // Re-check with the resolved mpv path: a deletion recorded that name,
+                // and the media may have changed while the URI was being resolved.
+                if (automatic && !optOut.allowsAutomaticSubtitle(mpvPath, mediaPath)) {
+                    Log.d(TAG, "Subtitle was deleted by the user, not loading it again: $mpvPath")
+                    return@runCatching
+                }
                 val mode = if (select) "select" else "auto"
                 
                 // Store mapping for reliable physical deletion later
@@ -143,14 +171,20 @@ class SubtitleManager(
         scope.launch(Dispatchers.IO) {
             runCatching {
                 val trackToRemove = tracks.firstOrNull { it.id == id }
-                
+                val mediaPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+
                 if (trackToRemove?.external == true && trackToRemove.externalFilename != null) {
                     val mpvPath = trackToRemove.externalFilename
                     val originalUriString = mpvPathToUriMap[mpvPath] ?: mpvPath
                     _externalSubtitles.remove(originalUriString)
                     mpvPathToUriMap.remove(mpvPath)
+                    // A deletion is an explicit request for no subtitles here, so stop
+                    // automatic loading from putting this one back moments later.
+                    optOut.markRemovedByUser(listOf(originalUriString, mpvPath), mediaPath)
+                } else {
+                    optOut.markRemovedByUser(emptyList(), mediaPath)
                 }
-                
+
                 MPVLib.command("sub-remove", id.toString())
                 withContext(Dispatchers.Main) {
                     onShowToast("Subtitle removed")
@@ -259,6 +293,10 @@ class SubtitleManager(
             _isDownloadingSub.value = true
             wyzieRepository.download(subtitle, mediaTitle)
                 .onSuccess { uri ->
+                    // Downloading from the search sheet is a deliberate choice, so it
+                    // overrides an earlier deletion of the same file.
+                    val mediaPath = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
+                    optOut.markChosenByUser(uri.toString(), mediaPath)
                     addSubtitle(uri)
                 }
                 .onFailure {

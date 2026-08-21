@@ -1,4 +1,25 @@
-# mpvRex Stremio Edition 4.5.13
+# mpvRex Stremio Edition 4.5.14
+
+## Fixed
+
+- Deleting a subtitle now stops automatic subtitle loading from adding it back
+  seconds later, for both online streams and local files. Manual subtitle search,
+  download, and file picking continue to work and override an earlier deletion.
+- The seekbar no longer shows buffered seconds that have not been downloaded yet
+  after tapping or dragging it. mpv's cached range is now checked against its read
+  position, so pre-seek cache samples are discarded instead of being drawn until
+  the next update corrects them.
+- Swipe-to-seek now suppresses the stale buffered range the same way seekbar
+  seeking already did.
+- The buffering percentage overlay no longer reports progress from a pre-seek
+  cache sample.
+
+## Added
+
+- Added tests covering subtitle deletion opt-out behavior and buffered-range
+  freshness across backward and forward seeks.
+
+## Previous Release
 
 ## Fixed
 

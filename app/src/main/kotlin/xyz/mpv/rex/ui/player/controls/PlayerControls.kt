@@ -201,6 +201,7 @@ fun PlayerControls(
   val demuxerCacheDuration by MPVLib.propFloat["demuxer-cache-duration"].collectAsState()
   val demuxerCacheTime by MPVLib.propFloat["demuxer-cache-time"].collectAsState()
   val demuxerCacheEnd by MPVLib.propFloat["demuxer-cache-state/cache-end"].collectAsState()
+  val demuxerReaderPts by MPVLib.propFloat["demuxer-cache-state/reader-pts"].collectAsState()
   val cacheBufferingState by MPVLib.propInt["cache-buffering-state"].collectAsState()
   val mediaPath by MPVLib.propString["path"].collectAsState()
   val precisePosition by viewModel.precisePosition.collectAsState()
@@ -255,10 +256,11 @@ fun PlayerControls(
   val isGestureSeeking by viewModel.isGestureSeeking.collectAsState()
   val isVerticalGestureActive by viewModel.isVerticalGestureActive.collectAsState()
 
-  LaunchedEffect(demuxerCacheEnd, demuxerCacheDuration, precisePosition, settlingSeekTarget) {
+  LaunchedEffect(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts, precisePosition, settlingSeekTarget) {
     val target = settlingSeekTarget ?: return@LaunchedEffect
     val cacheChanged = cacheSnapshotAtSeek != listOf(demuxerCacheEnd, demuxerCacheDuration)
-    if (cacheChanged && abs(precisePosition - target) <= 2f) {
+    val cacheFresh = isCacheStateFresh(demuxerReaderPts, precisePosition)
+    if (cacheChanged && cacheFresh && abs(precisePosition - target) <= 2f) {
       settlingSeekTarget = null
       cacheSnapshotAtSeek = emptyList()
     }
@@ -1028,9 +1030,14 @@ fun PlayerControls(
                           ?: position?.toFloat()?.coerceAtLeast(0f)
                           ?: 0f
                       val bufferedUntil =
-                        demuxerCacheEnd?.takeIf { it.isFinite() && it >= currentPosition }
-                          ?: demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPosition }
-                          ?: demuxerCacheDuration?.let { currentPosition + it }
+                        if (!isCacheStateFresh(demuxerReaderPts, currentPosition)) {
+                          // Cache state still describes the pre-seek range.
+                          null
+                        } else {
+                          demuxerCacheEnd?.takeIf { it.isFinite() && it >= currentPosition }
+                            ?: demuxerCacheTime?.takeIf { it.isFinite() && it >= currentPosition }
+                            ?: demuxerCacheDuration?.let { currentPosition + it }
+                        }
                       if (totalDuration > 0f && bufferedUntil != null) {
                         ((bufferedUntil / totalDuration) * 100f).toInt().coerceIn(0, 100)
                       } else {
@@ -1317,10 +1324,14 @@ fun PlayerControls(
             currentPosition = currentPos,
             duration = totalDuration,
             isNetworkMedia = isNetworkMedia,
-            bufferInvalidated = isSeeking || pendingNetworkSeek != null || settlingSeekTarget != null,
+            bufferInvalidated = isSeeking ||
+              pendingNetworkSeek != null ||
+              settlingSeekTarget != null ||
+              isGestureSeeking,
             cacheEnd = demuxerCacheEnd,
             cacheDuration = demuxerCacheDuration,
             bufferedSeconds = streamStats.bufferedSeconds,
+            readerPts = demuxerReaderPts,
           )
 
           SeekbarWithTimers(
