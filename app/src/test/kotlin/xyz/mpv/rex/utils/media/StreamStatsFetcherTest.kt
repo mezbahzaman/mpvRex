@@ -3,6 +3,7 @@ package xyz.mpv.rex.utils.media
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.json.JSONObject
 
 class StreamStatsFetcherTest {
   @Test
@@ -38,5 +39,40 @@ class StreamStatsFetcherTest {
       StreamStatsFetcher.buildStatsUrl("http://127.0.0.1:11470/$hash/video.mkv", hash),
     )
     assertNull(StreamStatsFetcher.buildStatsUrl("ftp://example.com/$hash/video.mkv", hash))
+  }
+
+  @Test
+  fun parsesIpWhoisCountryDetails() {
+    val details = StreamStatsFetcher.parseIpWhoisDetails(JSONObject("""
+      {"ip":"178.866.79.168","success":true,"country":"Singapore","flag":{"emoji":"\uD83C\uDDF8\uD83C\uDDEC"}}
+    """.trimIndent()))
+
+    assertEquals("178.866.79.168", details?.ip)
+    assertEquals("Singapore", details?.country)
+    assertEquals("\uD83C\uDDF8\uD83C\uDDEC", details?.countryFlag)
+  }
+
+  @Test
+  fun rejectsFailedOrIncompleteIpWhoisResponses() {
+    assertNull(StreamStatsFetcher.parseIpWhoisDetails(JSONObject("""{"success":false}""")))
+    assertNull(StreamStatsFetcher.parseIpWhoisDetails(JSONObject("""
+      {"ip":"8.8.8.8","success":true,"country":"United States"}
+    """.trimIndent())))
+  }
+
+  @Test
+  fun formatsCompactProtocolIpAndCountryLine() {
+    assertEquals(
+      "P2P • 178.866.79.168 • Singapore (\uD83C\uDDF8\uD83C\uDDEC)",
+      StreamStatsFetcher.formatStreamIdentity(
+        StreamStats(
+          protocol = "P2P",
+          ip = "178.866.79.168",
+          ipCountry = "Singapore",
+          ipCountryFlag = "\uD83C\uDDF8\uD83C\uDDEC",
+        ),
+      ),
+    )
+    assertEquals("HTTP", StreamStatsFetcher.formatStreamIdentity(StreamStats(protocol = "HTTP")))
   }
 }

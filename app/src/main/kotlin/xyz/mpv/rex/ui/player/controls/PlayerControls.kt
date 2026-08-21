@@ -2035,7 +2035,7 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
         style = MaterialTheme.typography.bodyMedium,
       )
     } else {
-      val details = listOf(streamStats.protocol, streamStats.host).filter { it.isNotBlank() }.joinToString("  ")
+      val details = StreamStatsFetcher.formatStreamIdentity(streamStats)
       val line =
         if (streamStats.isTorrent) {
           val swarmSeeds = streamStats.swarmSeeds

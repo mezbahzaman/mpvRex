@@ -31,6 +31,7 @@ import xyz.mpv.rex.utils.media.MediaInfoParser
 import java.net.URLDecoder
 import xyz.mpv.rex.utils.media.StreamStats
 import xyz.mpv.rex.utils.media.StreamStatsFetcher
+import xyz.mpv.rex.utils.media.IpWhoisDetails
 import xyz.mpv.rex.utils.media.StreamTuning
 import xyz.mpv.rex.utils.media.TorrentStats
 import `is`.xyz.mpv.MPVLib
@@ -2362,6 +2363,9 @@ class PlayerViewModel(
   private var pingPollInFlight = false
   private var torrentStatsJob: Job? = null
   private var streamStatsGeneration = 0L
+  private var ipWhoisHost: String? = null
+  private var ipWhoisDetails: IpWhoisDetails? = null
+  private var ipWhoisLookupInFlight = false
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2642,6 +2646,9 @@ class PlayerViewModel(
       torrentStatsJob = null
       lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
       lastHttpSampleMs = SystemClock.elapsedRealtime()
+      ipWhoisHost = null
+      ipWhoisDetails = null
+      ipWhoisLookupInFlight = false
     }
     val isNetwork = path != null && StreamTuning.isNetworkUri(path)
     if (!isNetwork) {
@@ -2683,6 +2690,27 @@ class PlayerViewModel(
 
     val stats = if (infoHash != null) lastTorrentStats else null
     val isTorrent = infoHash != null
+    val streamHost = Uri.parse(path).host.orEmpty()
+    if (streamHost.isNotBlank() && streamHost != ipWhoisHost && !ipWhoisLookupInFlight) {
+      ipWhoisHost = streamHost
+      ipWhoisLookupInFlight = true
+      val lookupGeneration = streamStatsGeneration
+      viewModelScope.launch(Dispatchers.IO) {
+        val details = StreamStatsFetcher.fetchIpWhoisDetails(streamHost)
+        if (streamStatsGeneration == lookupGeneration && lastStatsPath == path &&
+          runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
+          ipWhoisDetails = details
+          _streamStats.update { stats ->
+            if (stats.isNetwork) stats.copy(
+              ip = details?.ip.orEmpty(),
+              ipCountry = details?.country.orEmpty(),
+              ipCountryFlag = details?.countryFlag.orEmpty(),
+            ) else stats
+          }
+          ipWhoisLookupInFlight = false
+        }
+      }
+    }
 
     val now = SystemClock.elapsedRealtime()
     val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
@@ -2726,7 +2754,9 @@ class PlayerViewModel(
         pingMs = pingMs,
         pingTarget = extraPreferences.pingHost.get().trim(),
         protocol = if (isTorrent) "P2P" else Uri.parse(path).scheme?.uppercase().orEmpty(),
-        host = Uri.parse(path).host.orEmpty(),
+        ip = ipWhoisDetails?.ip.orEmpty(),
+        ipCountry = ipWhoisDetails?.country.orEmpty(),
+        ipCountryFlag = ipWhoisDetails?.countryFlag.orEmpty(),
         speedBytesPerSec = speedBytesPerSec,
       )
   }

@@ -1,4 +1,14 @@
-# mpvRex Stremio Edition 4.5.16
+# mpvRex Stremio Edition 4.5.17
+
+## Fixed
+
+- Stream information no longer displays the stream URL host. Its compact first
+  line now shows protocol, public IP, country, and country flag using a cached
+  ipwhois.io lookup, for example `P2P • 178.866.79.168 • Singapore (🇸🇬)`.
+- Public HTTP stream hosts are resolved to their server IP. Local/private P2P
+  streaming endpoints use the device's public IP reported by ipwhois.io.
+
+## Previous Release
 
 ## Fixed
 
