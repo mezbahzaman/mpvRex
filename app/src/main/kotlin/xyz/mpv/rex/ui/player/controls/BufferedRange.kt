@@ -24,6 +24,22 @@ internal fun isCacheStateFresh(readerPts: Float?, currentPosition: Float): Boole
   return abs(readerPts - currentPosition) <= CACHE_STATE_STALE_TOLERANCE_SECONDS
 }
 
+/**
+ * A seek cannot settle on an old cache sample, even when its reader position is
+ * temporarily unavailable. Normal playback still permits that fallback.
+ */
+internal fun isCacheStateReadyAfterSeek(
+  readerPts: Float?,
+  currentPosition: Float,
+  seekTarget: Float,
+): Boolean {
+  if (!currentPosition.isFinite() || !seekTarget.isFinite()) return false
+  if (abs(currentPosition - seekTarget) > 2f) return false
+  return readerPts?.takeIf { it.isFinite() }
+    ?.let { abs(it - seekTarget) <= CACHE_STATE_STALE_TOLERANCE_SECONDS }
+    ?: false
+}
+
 internal fun bufferedEndPosition(
   currentPosition: Float,
   duration: Float,

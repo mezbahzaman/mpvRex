@@ -1,4 +1,13 @@
-# mpvRex Stremio Edition 4.5.14
+# mpvRex Stremio Edition 4.5.15
+
+## Fixed
+
+- The seekbar's buffered-content hint now stays collapsed after seeking until
+  mpv confirms that its cache reader has reached the new playback location.
+  Missing or partially updated post-seek cache values can no longer expose the
+  stale pre-seek buffered range.
+
+## Previous Release
 
 ## Fixed
 

@@ -258,19 +258,11 @@ fun PlayerControls(
 
   LaunchedEffect(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts, precisePosition, settlingSeekTarget) {
     val target = settlingSeekTarget ?: return@LaunchedEffect
-    val cacheChanged = cacheSnapshotAtSeek != listOf(demuxerCacheEnd, demuxerCacheDuration)
-    val cacheFresh = isCacheStateFresh(demuxerReaderPts, precisePosition)
-    if (cacheChanged && cacheFresh && abs(precisePosition - target) <= 2f) {
+    val cacheChanged = cacheSnapshotAtSeek != listOf(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts)
+    if (cacheChanged && isCacheStateReadyAfterSeek(demuxerReaderPts, precisePosition, target)) {
       settlingSeekTarget = null
       cacheSnapshotAtSeek = emptyList()
     }
-  }
-
-  LaunchedEffect(settlingSeekTarget) {
-    if (settlingSeekTarget == null) return@LaunchedEffect
-    delay(SEEK_BUFFER_SETTLE_TIMEOUT_MS)
-    settlingSeekTarget = null
-    cacheSnapshotAtSeek = emptyList()
   }
 
   LaunchedEffect(controlsShown) {
@@ -1370,7 +1362,7 @@ fun PlayerControls(
               val seekTarget = pendingNetworkSeek
               if (!isCloseToStart && isNetworkMedia && seekTarget != null) {
                 settlingSeekTarget = seekTarget
-                cacheSnapshotAtSeek = listOf(demuxerCacheEnd, demuxerCacheDuration)
+                cacheSnapshotAtSeek = listOf(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts)
               } else if (isCloseToStart) {
                 settlingSeekTarget = null
                 cacheSnapshotAtSeek = emptyList()
@@ -2000,7 +1992,6 @@ fun PlayerControls(
   }
 }
 
-private const val SEEK_BUFFER_SETTLE_TIMEOUT_MS = 3_000L
 
 @Composable
 private fun StreamInfoOverlayContent(streamStats: StreamStats) {
