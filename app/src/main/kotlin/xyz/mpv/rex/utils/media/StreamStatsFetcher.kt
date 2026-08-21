@@ -50,8 +50,49 @@ data class TorrentStats(
 object StreamStatsFetcher {
 
   private const val STATS_TIMEOUT_MS = 1500
+  private const val PING_CONNECT_TIMEOUT_MS = 1500
   private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
   private val PING_TIME_REGEX = Regex("time[=<]([0-9]+(?:\\.[0-9]+)?)\\s*ms", RegexOption.IGNORE_CASE)
+
+  /**
+   * Measures round-trip latency to the actual stream host by timing a TCP
+   * connect (SYN/SYN-ACK). This is far more reliable and meaningful for a
+   * network stream than an ICMP ping to a fixed external host: it reflects the
+   * real path to the server that is delivering the video (e.g. Stremio's local
+   * WebTorrent server or the HTTP origin), it works when ICMP is blocked, and it
+   * is cheap enough to run once per second.
+   *
+   * @return latency in whole milliseconds (min 1), or 0 when the probe fails.
+   */
+  fun fetchStreamPingMs(host: String, port: Int): Int {
+    val resolvedPort = if (port > 0) port else 80
+    var socket: java.net.Socket? = null
+    return try {
+      val address = InetAddress.getByName(host)
+      val endpoint = java.net.InetSocketAddress(address, resolvedPort)
+      socket = java.net.Socket()
+      val startNs = System.nanoTime()
+      socket.connect(endpoint, PING_CONNECT_TIMEOUT_MS)
+      val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+      elapsedMs.toInt().coerceAtLeast(1)
+    } catch (_: Exception) {
+      0
+    } finally {
+      runCatching { socket?.close() }
+    }
+  }
+
+  /** Extracts host and port from a stream URL for latency probing. */
+  fun hostPortOf(url: String): Pair<String, Int>? {
+    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+    val host = uri.host ?: return null
+    val port = when {
+      uri.port >= 0 -> uri.port
+      uri.scheme.equals("https", ignoreCase = true) -> 443
+      else -> 80
+    }
+    return host to port
+  }
 
   /** Returns ICMP latency to google.com, or 0 when the probe times out/fails. */
   fun fetchPingMs(): Int {

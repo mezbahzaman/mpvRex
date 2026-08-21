@@ -196,6 +196,70 @@ class PlayerViewModel(
       _preciseDuration.value.takeIf { it > 0f }?.toInt() ?: _mpvDuration
     }
 
+  // ==================== Stremio resume reporting (last-known-good) ====================
+  //
+  // The "position" / "duration" extras returned to an external launcher (Stremio)
+  // MUST survive activity teardown. The StateFlow-collected `pos` can momentarily
+  // read null while the player is being destroyed, which previously caused the
+  // resume position to be dropped on some exits. We therefore keep a plain,
+  // always-available snapshot of the last valid position/duration (in whole
+  // seconds) that is updated on every position/duration tick, and expose a
+  // resolver that prefers a fresh live read from MPV and only then falls back to
+  // this cache. This makes the "continue watching" hand-back reliable on close.
+  @Volatile
+  private var lastGoodPositionSec: Int = -1
+
+  @Volatile
+  private var lastGoodDurationSec: Int = -1
+
+  /** Records the newest trustworthy position (seconds); ignores obvious resets. */
+  private fun rememberPosition(seconds: Int) {
+    if (seconds >= 0) lastGoodPositionSec = seconds
+  }
+
+  private fun rememberDuration(seconds: Int) {
+    if (seconds > 0) lastGoodDurationSec = seconds
+  }
+
+  /**
+   * Best available current playback position in whole seconds for reporting back
+   * to Stremio, or null if genuinely unknown. Priority: live MPV read → collected
+   * flow → last-known-good cache.
+   */
+  fun resolveReportPositionSec(): Int? {
+    val live = runCatching { MPVLib.getPropertyDouble("time-pos") }.getOrNull()
+    if (live != null && live >= 0.0) {
+      val sec = live.toInt()
+      rememberPosition(sec)
+      return sec
+    }
+    val flow = pos
+    if (flow != null && flow >= 0) {
+      rememberPosition(flow)
+      return flow
+    }
+    return lastGoodPositionSec.takeIf { it >= 0 }
+  }
+
+  /**
+   * Best available total duration in whole seconds for reporting back to Stremio,
+   * or null if unknown. Priority: live MPV read → collected flow → last-known-good.
+   */
+  fun resolveReportDurationSec(): Int? {
+    val live = runCatching { MPVLib.getPropertyDouble("duration") }.getOrNull()
+    if (live != null && live > 0.0) {
+      val sec = live.toInt()
+      rememberDuration(sec)
+      return sec
+    }
+    val flow = duration
+    if (flow != null && flow > 0) {
+      rememberDuration(flow)
+      return flow
+    }
+    return lastGoodDurationSec.takeIf { it > 0 }
+  }
+
   // External audio state and duration tracking
   private val _externalAudioTracks = mutableListOf<String>()
   val externalAudioTracks: List<String>
@@ -566,9 +630,11 @@ class PlayerViewModel(
 
     // Update precise position whenever integer time-pos changes in MPV (e.g. seeking while paused or controls hidden)
     viewModelScope.launch {
-      MPVLib.propInt["time-pos"].collect { _ ->
+      MPVLib.propInt["time-pos"].collect { intPos ->
+        if (intPos != null && intPos >= 0) rememberPosition(intPos)
         val time = MPVLib.getPropertyDouble("time-pos")
         if (time != null) {
+          rememberPosition(time.toInt())
           val primaryDur = _primaryVideoDuration.value
           if (_externalAudioTracks.isNotEmpty() && primaryDur != null && primaryDur > 0) {
             if (time >= primaryDur - 0.25) {
@@ -587,6 +653,7 @@ class PlayerViewModel(
       MPVLib.propInt["duration"].collect { _ ->
         val dur = MPVLib.getPropertyDouble("duration")
         if (dur != null && dur > 0) {
+          rememberDuration(dur.toInt())
           if (_externalAudioTracks.isEmpty()) {
             _primaryVideoDuration.value = dur
           }
@@ -2307,6 +2374,10 @@ class PlayerViewModel(
   // last known value so the overlay doesn't collapse to a misleading 0.
   private var lastKnownSeeds = 0
 
+  // Peers likewise briefly drop to 0 on an individual failed/empty stats poll;
+  // retain the last known non-zero count to keep the overlay steady.
+  private var lastKnownPeers = 0
+
   // Global swarm seeder count comes from the trackers themselves; polled
   // occasionally (HTTP trackers only) since the engine doesn't expose it.
   private var swarmSeeds: Int? = null
@@ -2325,7 +2396,8 @@ class PlayerViewModel(
   private var pingMs = 0
   private var lastPingPollMs = 0L
   private var pingPollInFlight = false
-  private val pingPollIntervalMs = 5_000L
+  // Ping is refreshed every second (the overlay is a live network readout).
+  private val pingPollIntervalMs = 1_000L
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2573,6 +2645,7 @@ class PlayerViewModel(
       activeInfoHash = null
       firstTorrentAttempt = 0L
       lastKnownSeeds = 0
+      lastKnownPeers = 0
       swarmSeeds = null
       lastSwarmPollMs = 0L
       swarmPollInFlight = false
@@ -2594,6 +2667,7 @@ class PlayerViewModel(
       activeInfoHash = null
       firstTorrentAttempt = 0L
       lastKnownSeeds = 0
+      lastKnownPeers = 0
       swarmSeeds = null
       _streamInfoDismissed.value = false
       _streamInfoAutoConsumed.value = false
@@ -2611,6 +2685,7 @@ class PlayerViewModel(
         lastTorrentStats = null
         firstTorrentAttempt = SystemClock.elapsedRealtime()
         lastKnownSeeds = 0
+        lastKnownPeers = 0
         swarmSeeds = null
         lastSwarmPollMs = 0L
         _streamInfoDismissed.value = false
@@ -2627,6 +2702,9 @@ class PlayerViewModel(
         lastTorrentStats = torrentStats
         if (torrentStats.hasWireData) {
           lastKnownSeeds = torrentStats.seeds
+        }
+        if (torrentStats.peers > 0) {
+          lastKnownPeers = torrentStats.peers
         }
         maybePollSwarmSeeds(infoHash, torrentStats)
       }
@@ -2716,13 +2794,20 @@ class PlayerViewModel(
         hasTorrentStats = stats != null,
         bufferedSeconds = bufferedSeconds,
         seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
-        peers = stats?.peers ?: 0,
+        peers = if ((stats?.peers ?: 0) > 0) stats!!.peers else lastKnownPeers,
         swarmSeeds = swarmSeeds,
         pingMs = pingMs,
         speedBytesPerSec = speedBytesPerSec,
       )
   }
 
+  /**
+   * Refreshes the network latency reading once per interval. Latency is measured
+   * as a TCP connect to the stream's own host (reliable even when ICMP is
+   * blocked, and representative of the real path to the video server). The last
+   * successful value is retained across a transient failed probe so the overlay
+   * never flickers to 0 while the stream is otherwise healthy.
+   */
   private fun maybePollPing(path: String) {
     if (pingPollInFlight) return
     val now = SystemClock.elapsedRealtime()
@@ -2731,9 +2816,18 @@ class PlayerViewModel(
     pingPollInFlight = true
     viewModelScope.launch {
       try {
-        val result = withContext(Dispatchers.IO) { StreamStatsFetcher.fetchPingMs() }
+        val hostPort = StreamStatsFetcher.hostPortOf(path)
+        val result = withContext(Dispatchers.IO) {
+          if (hostPort != null) {
+            StreamStatsFetcher.fetchStreamPingMs(hostPort.first, hostPort.second)
+          } else {
+            StreamStatsFetcher.fetchPingMs()
+          }
+        }
         if (lastStatsPath == path && runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
-          pingMs = result
+          // Retain the previous reading on a failed probe (result == 0) instead
+          // of collapsing the displayed latency to zero.
+          if (result > 0) pingMs = result
         }
       } finally {
         pingPollInFlight = false
