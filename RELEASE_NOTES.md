@@ -1,4 +1,12 @@
-# mpvRex Stremio Edition 4.5.15
+# mpvRex Stremio Edition 4.5.16
+
+## Fixed
+
+- Restore the seekbar buffered-content hint on streams where mpv does not
+  provide `reader-pts`. The hint still rejects the pre-seek range, then becomes
+  visible after mpv publishes the next cache update at the seek target.
+
+## Previous Release
 
 ## Fixed
 

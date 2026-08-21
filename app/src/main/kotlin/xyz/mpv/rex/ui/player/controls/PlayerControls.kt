@@ -231,6 +231,7 @@ fun PlayerControls(
   var pendingNetworkSeek by remember { mutableStateOf<Float?>(null) }
   var settlingSeekTarget by remember(mediaPath) { mutableStateOf<Float?>(null) }
   var cacheSnapshotAtSeek by remember(mediaPath) { mutableStateOf<List<Float?>>(emptyList()) }
+  var cacheSnapshotAtTarget by remember(mediaPath) { mutableStateOf<List<Float?>?>(null) }
   var resetControlsTimestamp by remember { mutableStateOf(0L) }
   val seekText by viewModel.seekText.collectAsState()
   val currentChapter by MPVLib.propInt["chapter"].collectAsState()
@@ -258,10 +259,23 @@ fun PlayerControls(
 
   LaunchedEffect(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts, precisePosition, settlingSeekTarget) {
     val target = settlingSeekTarget ?: return@LaunchedEffect
-    val cacheChanged = cacheSnapshotAtSeek != listOf(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts)
-    if (cacheChanged && isCacheStateReadyAfterSeek(demuxerReaderPts, precisePosition, target)) {
+    val currentCache = listOf(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts)
+    if (abs(precisePosition - target) <= 2f && cacheSnapshotAtTarget == null) {
+      // This may still be mpv's final pre-seek sample. Keep it hidden and wait
+      // for one cache update measured after playback reached the new position.
+      cacheSnapshotAtTarget = currentCache
+    }
+    val ready = isCacheStateReadyAfterSeek(
+      readerPts = demuxerReaderPts,
+      currentPosition = precisePosition,
+      seekTarget = target,
+      cacheChangedAfterSeek = cacheSnapshotAtSeek != currentCache,
+      cacheChangedAfterTarget = cacheSnapshotAtTarget?.let { it != currentCache } == true,
+    )
+    if (ready) {
       settlingSeekTarget = null
       cacheSnapshotAtSeek = emptyList()
+      cacheSnapshotAtTarget = null
     }
   }
 
@@ -1363,9 +1377,11 @@ fun PlayerControls(
               if (!isCloseToStart && isNetworkMedia && seekTarget != null) {
                 settlingSeekTarget = seekTarget
                 cacheSnapshotAtSeek = listOf(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts)
+                cacheSnapshotAtTarget = null
               } else if (isCloseToStart) {
                 settlingSeekTarget = null
                 cacheSnapshotAtSeek = emptyList()
+                cacheSnapshotAtTarget = null
               }
               if (isCloseToStart) {
                 viewModel.seekTo(dragStartValue.toInt())

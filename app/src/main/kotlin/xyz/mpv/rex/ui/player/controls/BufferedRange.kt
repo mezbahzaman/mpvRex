@@ -32,12 +32,15 @@ internal fun isCacheStateReadyAfterSeek(
   readerPts: Float?,
   currentPosition: Float,
   seekTarget: Float,
+  cacheChangedAfterSeek: Boolean,
+  cacheChangedAfterTarget: Boolean,
 ): Boolean {
   if (!currentPosition.isFinite() || !seekTarget.isFinite()) return false
   if (abs(currentPosition - seekTarget) > 2f) return false
-  return readerPts?.takeIf { it.isFinite() }
+  val readerReachedTarget = readerPts?.takeIf { it.isFinite() }
     ?.let { abs(it - seekTarget) <= CACHE_STATE_STALE_TOLERANCE_SECONDS }
     ?: false
+  return readerReachedTarget && cacheChangedAfterSeek || cacheChangedAfterTarget
 }
 
 internal fun bufferedEndPosition(

@@ -71,10 +71,17 @@ class BufferedRangeTest {
   }
 
   @Test
-  fun seekSettlementRequiresReaderPositionAtTarget() {
-    assertTrue(isCacheStateReadyAfterSeek(902f, 900f, 900f))
-    assertFalse(isCacheStateReadyAfterSeek(null, 900f, 900f))
-    assertFalse(isCacheStateReadyAfterSeek(100f, 900f, 900f))
-    assertFalse(isCacheStateReadyAfterSeek(902f, 850f, 900f))
+  fun seekSettlementUsesReaderPositionWhenAvailable() {
+    assertTrue(isCacheStateReadyAfterSeek(902f, 900f, 900f, true, false))
+    assertFalse(isCacheStateReadyAfterSeek(902f, 900f, 900f, false, false))
+    assertFalse(isCacheStateReadyAfterSeek(100f, 900f, 900f, true, false))
+    assertFalse(isCacheStateReadyAfterSeek(902f, 850f, 900f, true, true))
+  }
+
+  @Test
+  fun seekSettlementFallsBackToPostTargetCacheUpdate() {
+    assertFalse(isCacheStateReadyAfterSeek(null, 900f, 900f, true, false))
+    assertTrue(isCacheStateReadyAfterSeek(null, 900f, 900f, true, true))
+    assertTrue(isCacheStateReadyAfterSeek(100f, 900f, 900f, true, true))
   }
 }
