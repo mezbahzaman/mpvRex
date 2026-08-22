@@ -1261,8 +1261,8 @@ fun PlayerControls(
             Modifier.constrainAs(streamInfoOverlay) {
               start.linkTo(parent.start)
               end.linkTo(parent.end)
-              top.linkTo(parent.top, margin = 96.dp)
-              bottom.linkTo(parent.bottom, margin = 96.dp)
+              top.linkTo(parent.top, margin = 72.dp)
+              bottom.linkTo(parent.bottom, margin = 120.dp)
               horizontalBias = 0f
               verticalBias = 0.5f
             },
@@ -2020,7 +2020,7 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
   Row(
     verticalAlignment = Alignment.CenterVertically,
     modifier = Modifier
-      .padding(start = 16.dp, end = 16.dp)
+      .padding(start = 32.dp, end = 16.dp)
       .widthIn(max = 360.dp),
   ) {
     if (streamStats.fetchingMetadata) {
@@ -2035,14 +2035,6 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
         style = MaterialTheme.typography.bodyMedium,
       )
     } else {
-      val details = StreamStatsFetcher.formatStreamIdentity(streamStats)
-      Box(
-        modifier = Modifier
-          .width(2.dp)
-          .height(124.dp)
-          .background(Color.White.copy(alpha = 0.42f)),
-      )
-      Spacer(modifier = Modifier.width(10.dp))
       Column(
         modifier = Modifier
           .clip(RoundedCornerShape(8.dp))
@@ -2051,13 +2043,8 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
       ) {
         Text(
-          text = details,
+          text = streamStats.protocol,
           color = Color.White.copy(alpha = 0.78f),
-          style = MaterialTheme.typography.labelSmall,
-        )
-        Text(
-          text = "$bufferedSeconds s buffered",
-          color = Color.White.copy(alpha = 0.82f),
           style = MaterialTheme.typography.labelSmall,
         )
         if (streamStats.ip.isNotBlank()) {
@@ -2074,6 +2061,11 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
             style = MaterialTheme.typography.labelSmall,
           )
         }
+        Text(
+          text = "$bufferedSeconds s buffered",
+          color = Color.White.copy(alpha = 0.82f),
+          style = MaterialTheme.typography.labelSmall,
+        )
         if (streamStats.isTorrent) {
           Text(
             text = "${streamStats.seeds} seeds",

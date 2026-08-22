@@ -1,4 +1,15 @@
-# mpvRex Stremio Edition 4.5.22
+# mpvRex Stremio Edition 4.5.23
+
+## Fixed
+
+- Removed the vertical guide line from the stream information panel.
+- Moved the panel right and slightly upward to avoid the display notch and
+  bottom-left playback controls.
+- Split the stream identity into separate protocol, IP, and country rows.
+- Reordered the remaining fields into protocol, IP, country, buffer, seeds,
+  peers, swarm, ping, and speed order.
+
+## Previous Release
 
 ## Changed
 
