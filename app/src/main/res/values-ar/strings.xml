@@ -14,8 +14,6 @@
     <string name="pref_appearance_category_bottom_nav">تبويبات شريط التنقل السفلي</string>
     <string name="pref_appearance_tab_home_title">الرئيسية / الملفات</string>
     <string name="pref_appearance_tab_home_summary">عرض المجلدات المحلية ومستعرض الملفات</string>
-    <string name="pref_appearance_tab_shorts_title">RexShorts</string>
-    <string name="pref_appearance_tab_shorts_summary">تبديل تدفقات الفيديو الرأسي السريعة</string>
     <string name="pref_appearance_tab_recents_title">المشغَّل مؤخراً</string>
     <string name="pref_appearance_tab_recents_summary">استئناف جلسات الفيديو السابقة بسرعة</string>
     <string name="pref_appearance_tab_playlists_title">قوائم التشغيل</string>
@@ -695,7 +693,6 @@
     <string name="network_connection_disconnect">قطع الاتصال</string>
     <string name="network_connection_connect">اتصال</string>
 
-            <string name="shorts">القصيرة</string>
     <string name="no_playlists_found">لا يوجد أي قوائم تشغيل</string>
     <string name="try_different_search_term">جرّب مصطلح بحث مختلف</string>
     <string name="no_playlists_yet">لا قوائم تشغيل بعد</string>
@@ -730,16 +727,6 @@
     <string name="reorder_playlist">إعادة ترتيب قوائم التشغيل</string>
     <string name="remove_from_playlist_confirm">ستتم إزالة %1$s المحددة من قائمة التشغيل هذه. لن يتم حذف %2$s الأصلية.</string>
     <string name="remove_from_playlist_action">إزالة من قائمة التشغيل</string>
-    <string name="go_back">رجوع</string>
-    <string name="auto_swipe_to_next_short">التمرير التلقائي للمقطع القصير التالي</string>
-    <string name="auto_swipe_to_next_short_desc">التمرير تلقائياً عند انتهاء الفيديو</string>
-    <string name="long_press_speed">سرعة الضغط المطوّل</string>
-    <string name="video_information">معلومات الفيديو</string>
-    <string name="blocked_videos_manager">مدير الفيديوهات المحظورة</string>
-    <string name="delete_short">حذف المقطع القصير</string>
-    <string name="delete_short_desc">حذف هذا الملف نهائياً من الجهاز</string>
-    <string name="long_press_speed_desc">اضغط مطوّلاً لتثبيت السرعة واضغط بشكل عادي للتغيير</string>
-    <string name="delete_short_confirm_message">هل أنت متأكد من رغبتك في حذف هذا المقطع القصير نهائياً؟ لا يمكن التراجع عن هذا الإجراء.</string>
     <string name="moving_to_private_space">جارٍ النقل إلى المساحة الخاصة...</string>
     <string name="moved_to_private_space">تم النقل إلى المساحة الخاصة</string>
     <string name="moved_to_private_space_desc">تم نقل %1$d من الفيديوهات بنجاح إلى المساحة الخاصة.\nللوصول إلى المساحة الخاصة، اضغط مطولاً على اسم التطبيق في أعلى الشاشة الرئيسية.</string>
@@ -813,35 +800,7 @@
     <string name="pref_category_playback_controls">التشغيل والتحكم</string>
     <string name="pref_category_file_management">إدارة الملفات</string>
     <string name="pref_category_media_settings">إعدادات الوسائط</string>
-    <string name="pref_category_rexshorts">ريكس شورتس</string>
-    <string name="pref_category_rexshorts_settings">إعدادات RexShorts</string>
-    <string name="pref_category_rexshorts_settings_desc">إدارة التفعيل والتعطيل والتشغيل العشوائي والمحتوى المحجوب</string>
     <string name="pref_category_advanced_about">المتقدمة وحول التطبيق</string>
-    <string name="pref_enable_rexshorts">تفعيل ريكس شورتس</string>
-    <string name="pref_enable_rexshorts_summary">إظهار تبويب المقاطع القصيرة في شريط التنقل السفلي</string>
-    <string name="pref_auto_swipe_shorts">التمرير التلقائي للمقطع القصير التالي</string>
-    <string name="pref_auto_swipe_shorts_summary">التمرير تلقائياً إلى المقطع القصير التالي عند انتهاء المقطع الحالي</string>
-    <string name="pref_category_discovery">الاستكشاف</string>
-    <string name="pref_include_short_horizontal_videos">تضمين الفيديوهات العادية</string>
-    <string name="pref_include_short_horizontal_videos_summary">إظهار الفيديوهات العادية أيضا في التغذية إذا كانت قصيرة المدة</string>
-    <string name="pref_max_horizontal_video_duration">الحد الأقصى لمدة الفيديوهات الأفقية</string>
-    <plurals name="pref_max_horizontal_video_duration_desc">
-        <item quantity="zero">تقييد الفيديوهات الأفقية إلى %d دقيقة</item>
-        <item quantity="one">تقييد الفيديوهات الأفقية إلى دقيقة واحدة</item>
-        <item quantity="two">تقييد الفيديوهات الأفقية إلى دقيقتين</item>
-        <item quantity="few">تقييد الفيديوهات الأفقية إلى %d دقائق</item>
-        <item quantity="many">تقييد الفيديوهات الأفقية إلى %d دقيقة</item>
-        <item quantity="other">تقييد الفيديوهات الأفقية إلى %d دقيقة</item>
-    </plurals>
-    <string name="pref_sourced_folders">المجلدات المصدرية</string>
-    <string name="pref_sourced_folders_all">مصدرها جميع المجلدات المفحوصة</string>
-    <string name="pref_sourced_folders_count">مصدرها %1$d مجلد/مجلدات</string>
-    <string name="pref_sourced_folders_list">المصدر: %1$s</string>
-    <string name="pref_category_content_management">إدارة المحتوى</string>
-    <string name="pref_blocked_videos">الفيديوهات المحظورة</string>
-    <string name="pref_blocked_videos_summary">عرض وإدارة المقاطع القصيرة المحظورة</string>
-    <string name="pref_select_sourced_folders">اختيار المجلدات المصدر</string>
-    <string name="pref_select_sourced_folders_desc">اختر المجلدات التي يتم جلب المقاطع القصيرة منها. إذا لم يتم اختيار أي مجلد، سيتم جلبها من جميع المجلدات.</string>
     <string name="pref_category_updates">التحديثات</string>
     <string name="pref_about_auto_check_updates">التحقق التلقائي من التحديثات</string>
     <string name="pref_about_auto_check_updates_summary">التحقق من الإصدارات الجديدة عند بدء التشغيل</string>
@@ -1027,10 +986,6 @@
     <string name="player_sheets_aspect_ratio_reset_advanced_zoom">إعادة تعيين التكبير المتقدم</string>
     <string name="mark_as_new">جديد</string>
     <string name="mark_as_new_desc">إزالة جميع العلامات والوسم كجديد</string>
-    <string name="pref_enable_glass_shorts_controls">عناصر التحكم زجاجية للمقاطع القصيرة</string>
-    <string name="pref_enable_glass_shorts_controls_summary">تطبيق نمط الزجاج Glass-morphism على أزرار التحكم في المقاطع القصيرة</string>
-    <string name="pref_show_shorts_back_button">إظهار زر الرجوع</string>
-    <string name="pref_show_shorts_back_button_summary">إظهار زر الرجوع في لوحة التحكم الجانبية للمقاطع القصيرة</string>
 
     <string name="item_type_video">فيديو</string>
     <string name="item_type_folder">مجلد</string>
@@ -1133,8 +1088,6 @@
     <string name="pref_advanced_enable_media_info_title">تفعيل خيار معلومات الوسائط</string>
     <string name="pref_advanced_enable_media_info_summary">إظهار \"\"معلومات الوسائط\"\" كخيار في قوائم \"\"فتح باستخدام\"\" على مستوى النظام</string>
 
-    <string name="blocked_shorts_empty_state">لا توجد فيديوهات محظورة</string>
-    <string name="blocked_shorts_unblock_button">محظور</string>
 
     <string name="playlist_now_playing">قيد التشغيل الآن</string>
     <string name="playlist_playing">قيد التشغيل</string>
@@ -1173,24 +1126,6 @@
     <string name="player_sheets_tab_aesthetics">الجماليات</string>
     <string name="player_sheets_tab_gestures">الإيماءات</string>
 
-        <!-- Shorts Player Action Buttons -->
-    <string name="shorts_action_love">إعجاب</string>
-    <string name="shorts_action_loved">أعجبني</string>
-    <string name="shorts_action_block">حظر</string>
-    <string name="shorts_action_blocked">محظور</string>
-    <string name="shorts_action_free">حـر</string>
-    <string name="shorts_action_back">رجوع</string>
-    <string name="shorts_action_more">المزيد</string>
-
-        <!-- Shorts Empty / Exhausted States -->
-    <string name="shorts_no_blocked_videos_found">لم يُعثر على فيديوهات محظورة</string>
-    <string name="shorts_no_vertical_videos_found">لم يُعثر على فيديوهات قصيرة</string>
-    <string name="shorts_all_finished_title">انتهت جميع الفيديوهات</string>
-    <string name="shorts_all_finished_message">شاهدت جميع الفيديوهات القصيرة المتاحة حالياً.</string>
-
-        <!-- Shorts Video Info Dialog -->
-    <string name="shorts_video_info_title">معلومات الفيديو</string>
-    <string name="shorts_video_info_resolution">الدقة: %1$dx%2$d</string>
 
     <string name="player_sheets_zoom_decrease">تقليل التكبير</string>
     <string name="player_sheets_zoom_increase">زيادة التكبير</string>
