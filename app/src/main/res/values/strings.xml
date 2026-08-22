@@ -182,6 +182,13 @@
     <string name="pref_player_close_after_eof">Close after the end of playback</string>
     <string name="buffering_percent">Buffering %1$d%%</string>
     <string name="stream_stats_fetching_metadata">Fetching torrent metadata…</string>
+    <string name="stream_info_http_placement_title">HTTP stream info placement</string>
+    <string name="stream_info_p2p_placement_title">P2P stream info placement</string>
+    <string name="stream_info_placement_offset">Offset: %1$d px horizontal, %2$d px vertical</string>
+    <string name="stream_info_move_left">Move stream info left</string>
+    <string name="stream_info_move_right">Move stream info right</string>
+    <string name="stream_info_move_up">Move stream info up</string>
+    <string name="stream_info_move_down">Move stream info down</string>
     <string name="stream_stats_line">%1$ds buffered • %2$d seeds • %3$d peers • %4$s • %5$s</string>
     <string name="stream_stats_line_swarm">%1$ds buffered • %2$d seeds • %3$d peers • %4$d in swarm • %5$s • %6$s</string>
     <string name="stream_stats_line_http">%1$ds buffered • %2$s • %3$s</string>

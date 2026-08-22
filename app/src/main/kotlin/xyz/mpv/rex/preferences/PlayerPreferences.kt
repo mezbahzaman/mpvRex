@@ -90,6 +90,11 @@ class PlayerPreferences(
   val autoplayNextVideo = preferenceStore.getBoolean("autoplay_next_video", true)
   val showControlsOnPlay = preferenceStore.getBoolean("show_controls_on_play", true)
 
+  val streamInfoHttpOffsetX = preferenceStore.getInt("stream_info_http_offset_x_px", 0)
+  val streamInfoHttpOffsetY = preferenceStore.getInt("stream_info_http_offset_y_px", 0)
+  val streamInfoP2pOffsetX = preferenceStore.getInt("stream_info_p2p_offset_x_px", 0)
+  val streamInfoP2pOffsetY = preferenceStore.getInt("stream_info_p2p_offset_y_px", 0)
+
   val autoPiPOnNavigation = preferenceStore.getBoolean("auto_pip_on_navigation", false)
 
   val keepScreenOnWhenPaused = preferenceStore.getBoolean("keep_screen_on_when_paused", false)

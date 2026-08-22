@@ -29,6 +29,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TouchApp
@@ -700,6 +704,59 @@ fun AestheticsTab() {
       checked = playerAlwaysDarkMode,
       onCheckedChange = { appearancePreferences.playerAlwaysDarkMode.set(it) }
     )
+
+    StreamInfoPlacementControls(
+      title = stringResource(R.string.stream_info_http_placement_title),
+      offsetX = playerPreferences.streamInfoHttpOffsetX,
+      offsetY = playerPreferences.streamInfoHttpOffsetY,
+    )
+    StreamInfoPlacementControls(
+      title = stringResource(R.string.stream_info_p2p_placement_title),
+      offsetX = playerPreferences.streamInfoP2pOffsetX,
+      offsetY = playerPreferences.streamInfoP2pOffsetY,
+    )
+  }
+}
+
+@Composable
+private fun StreamInfoPlacementControls(
+  title: String,
+  offsetX: xyz.mpv.rex.preferences.preference.Preference<Int>,
+  offsetY: xyz.mpv.rex.preferences.preference.Preference<Int>,
+) {
+  val x by offsetX.collectAsState()
+  val y by offsetY.collectAsState()
+  Surface(
+    shape = MaterialTheme.shapes.medium,
+    color = MaterialTheme.colorScheme.surfaceContainerLow,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Column(modifier = Modifier.padding(MaterialTheme.spacing.small)) {
+      Text(title, style = MaterialTheme.typography.bodyLarge)
+      Text(
+        text = stringResource(R.string.stream_info_placement_offset, x, y),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        IconButton(onClick = { offsetX.set(x - 1) }) {
+          Icon(Icons.Default.KeyboardArrowLeft, contentDescription = stringResource(R.string.stream_info_move_left))
+        }
+        IconButton(onClick = { offsetY.set(y - 1) }) {
+          Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.stream_info_move_up))
+        }
+        IconButton(onClick = { offsetY.set(y + 1) }) {
+          Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.stream_info_move_down))
+        }
+        IconButton(onClick = { offsetX.set(x + 1) }) {
+          Icon(Icons.Default.KeyboardArrowRight, contentDescription = stringResource(R.string.stream_info_move_right))
+        }
+      }
+    }
   }
 }
 

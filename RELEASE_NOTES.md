@@ -1,4 +1,14 @@
-# mpvRex Stremio Edition 4.5.23
+# mpvRex Stremio Edition 4.5.24
+
+## Added
+
+- Added independent HTTP and P2P stream-info placement controls under Player
+  More Options > Aesthetics.
+- Each directional button moves its stream-info panel by exactly one pixel.
+- Placement offsets persist across launches and are included in settings export
+  and import.
+
+## Previous Release
 
 ## Fixed
 

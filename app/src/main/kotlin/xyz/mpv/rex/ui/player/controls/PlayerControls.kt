@@ -88,6 +88,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -210,6 +211,10 @@ fun PlayerControls(
   val playbackSpeed by MPVLib.propFloat["speed"].collectAsState()
   val eofReached by MPVLib.propBoolean["eof-reached"].collectAsState()
   val streamStats by viewModel.streamStats.collectAsState()
+  val streamInfoHttpOffsetX by playerPreferences.streamInfoHttpOffsetX.collectAsState()
+  val streamInfoHttpOffsetY by playerPreferences.streamInfoHttpOffsetY.collectAsState()
+  val streamInfoP2pOffsetX by playerPreferences.streamInfoP2pOffsetX.collectAsState()
+  val streamInfoP2pOffsetY by playerPreferences.streamInfoP2pOffsetY.collectAsState()
   val streamStatsPanelVisible by viewModel.streamStatsPanelVisible.collectAsState()
   val streamInfoDismissed by viewModel.streamInfoDismissed.collectAsState()
   val streamInfoAutoConsumed by viewModel.streamInfoAutoConsumed.collectAsState()
@@ -1258,7 +1263,10 @@ fun PlayerControls(
           enter = fadeIn(playerControlsEnterAnimationSpec()),
           exit = fadeOut(playerControlsExitAnimationSpec()),
           modifier =
-            Modifier.constrainAs(streamInfoOverlay) {
+            Modifier.graphicsLayer {
+              translationX = (if (streamStats.isTorrent) streamInfoP2pOffsetX else streamInfoHttpOffsetX).toFloat()
+              translationY = (if (streamStats.isTorrent) streamInfoP2pOffsetY else streamInfoHttpOffsetY).toFloat()
+            }.constrainAs(streamInfoOverlay) {
               start.linkTo(parent.start)
               end.linkTo(parent.end)
               top.linkTo(parent.top, margin = 72.dp)
