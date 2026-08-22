@@ -364,7 +364,6 @@ object StreamStatsFetcher {
     when {
       bytesPerSec >= 1_000_000 -> String.format("%.1f MB/s", bytesPerSec / 1_000_000f)
       bytesPerSec >= 1_000 -> "${bytesPerSec / 1_000} KB/s"
-      bytesPerSec > 0 -> "$bytesPerSec B/s"
       else -> "0 KB/s"
     }
 }

@@ -2063,19 +2063,25 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
           stringResource(R.string.stream_stats_line_http, bufferedSeconds, pingText, speedText)
         }
       Column {
-        Text(
-          text = details,
-          color = Color.White.copy(alpha = 0.72f),
-          style = MaterialTheme.typography.labelSmall,
-          maxLines = 1,
-        )
-        Text(
-          text = line,
-          color = Color.White.copy(alpha = 0.95f),
-          style = MaterialTheme.typography.bodyMedium,
-          fontWeight = FontWeight.Medium,
-          maxLines = 2,
-        )
+        Box(modifier = Modifier.widthIn(min = 260.dp, max = 360.dp)) {
+          Text(
+            text = details,
+            color = Color.White.copy(alpha = 0.72f),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
+          )
+        }
+        Box(modifier = Modifier.widthIn(min = 260.dp, max = 360.dp)) {
+          Text(
+            text = line,
+            color = Color.White.copy(alpha = 0.95f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+          )
+        }
       }
     }
   }

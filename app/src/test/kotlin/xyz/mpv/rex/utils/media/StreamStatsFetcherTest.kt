@@ -21,6 +21,8 @@ class StreamStatsFetcherTest {
   @Test
   fun formatsZeroAndMegabyteSpeeds() {
     assertEquals("0 KB/s", StreamStatsFetcher.formatSpeed(0))
+    assertEquals("0 KB/s", StreamStatsFetcher.formatSpeed(999))
+    assertEquals("1 KB/s", StreamStatsFetcher.formatSpeed(1_000))
     assertEquals("1.3 MB/s", StreamStatsFetcher.formatSpeed(1_300_000))
   }
 

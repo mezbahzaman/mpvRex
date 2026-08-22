@@ -228,6 +228,7 @@ class PlayerActivity :
   private var returnResultSet = false
   private var lastKnownPositionMs: Long? = null
   private var lastKnownDurationMs: Long? = null
+  private var lastSnapshotWriteMs = 0L
 
   /**
    * Helper for managing Picture-in-Picture mode.
@@ -365,6 +366,9 @@ class PlayerActivity :
     pendingIntentExtras = true
     intentPositionMs = POSITION_NOT_SET.toLong()
     logIntentExtras("onCreate", intent)
+    if (!isStremioHandoff(intent)) {
+      StremioProgressSnapshot.clear(this)
+    }
     // The headless controller may retain MPV idle after its mini player is closed. Always take
     // ownership before initializing so a normal video launch cannot create the global singleton
     // a second time.
@@ -1786,6 +1790,15 @@ class PlayerActivity :
         viewModel.updateAmbientStretch()
       }
     }
+    if (property == "time-pos" || property == "duration") {
+      val now = android.os.SystemClock.elapsedRealtime()
+      if (now - lastSnapshotWriteMs >= 1_000L) {
+        lastSnapshotWriteMs = now
+        if (isStremioHandoff(intent)) {
+          StremioProgressSnapshot.save(this, lastKnownPositionMs, lastKnownDurationMs, true)
+        }
+      }
+    }
   }
 
   /**
@@ -2680,6 +2693,9 @@ class PlayerActivity :
 
     Log.d(TAG, "Setting external-player result: position=${positionMs}ms duration=${durationMs}ms")
     setResult(RESULT_OK, StremioHandoff.resultIntent(positionMs, durationMs))
+    if (isStremioHandoff(intent)) {
+      StremioProgressSnapshot.save(this, positionMs, durationMs, true)
+    }
     returnResultSet = true
   }
 

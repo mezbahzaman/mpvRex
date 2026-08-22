@@ -61,7 +61,6 @@ object ExtraPreferencesScreen : Screen {
     val autoStremioSubtitles by preferences.autoStremioSubtitles.collectAsState()
     val maximumBufferedSeconds by preferences.maximumBufferedSeconds.collectAsState()
     val maximumNetworkDownloadMiB by preferences.maximumNetworkDownloadMiB.collectAsState()
-    val streamInfoRefreshSeconds by preferences.streamInfoRefreshSeconds.collectAsState()
     val pingHost by preferences.pingHost.collectAsState()
     val autoLocalSubtitles by preferences.autoLocalSubtitles.collectAsState()
     val excludedFolders by preferences.localSubtitleExcludedFolders.collectAsState()
@@ -171,20 +170,6 @@ object ExtraPreferencesScreen : Screen {
                       maximumNetworkDownloadMiB,
                       0,
                       preferences.maximumNetworkDownloadMiB::set,
-                    )
-                },
-              )
-              PreferenceDivider()
-              ValuePreference(
-                title = stringResource(R.string.pref_extra_stream_info_refresh_title),
-                summary = stringResource(R.string.pref_extra_seconds_value, streamInfoRefreshSeconds),
-                onClick = {
-                  numberDialog =
-                    NumberSetting(
-                      R.string.pref_extra_stream_info_refresh_title,
-                      streamInfoRefreshSeconds,
-                      1,
-                      preferences.streamInfoRefreshSeconds::set,
                     )
                 },
               )

@@ -1,4 +1,16 @@
-# mpvRex Stremio Edition 4.5.18
+# mpvRex Stremio Edition 4.5.19
+
+## Changed
+
+- Stream information metrics now refresh together on one synchronized update.
+- Public IP and country details refresh every minute, while the stream protocol is
+  captured once per playback session.
+- Transfer speeds now use KB/s or MB/s, with values below 1 KB/s shown as `0 KB/s`.
+- Removed the RexShorts feature, its preferences, media data, and database table.
+- Reduced background polling and retained the latest Stremio playback progress in
+  durable storage for crash recovery.
+
+## Previous Release
 
 ## Fixed
 

@@ -624,12 +624,6 @@ object SearchablePreferences {
                 screen = ExtraPreferencesScreen,
             ))
             add(SearchablePreference(
-                titleRes = R.string.pref_extra_stream_info_refresh_title,
-                keywords = listOf("stream", "info", "refresh", "seconds"),
-                category = "Extra Settings",
-                screen = ExtraPreferencesScreen,
-            ))
-            add(SearchablePreference(
                 titleRes = R.string.pref_extra_ping_host_title,
                 keywords = listOf("ping", "host", "connectivity", "network"),
                 category = "Extra Settings",

@@ -495,25 +495,14 @@ class PlayerViewModel(
       while (isActive) {
         updateStreamStats()
         val pathAvailable = runCatching { MPVLib.getPropertyString("path") }.getOrNull() != null
-        val streamInfoVisible = streamStatsPanelVisible.value ||
-          (_streamStats.value.isNetwork && !_streamInfoDismissed.value && !_streamInfoAutoConsumed.value)
-        val refreshSeconds = if (streamInfoVisible) {
-          extraPreferences.streamInfoRefreshSeconds.get().coerceIn(1, 60)
+        val refreshSeconds = if (streamStatsPanelVisible.value && pathAvailable) {
+          1
         } else if (!pathAvailable) {
           1
         } else {
           HIDDEN_STREAM_STATS_REFRESH_SECONDS
         }
         delay(refreshSeconds * 1000L)
-      }
-    }
-
-    // Ping has its own cadence so slow torrent/tracker requests cannot make it stale.
-    viewModelScope.launch {
-      while (isActive) {
-        val path = runCatching { MPVLib.getPropertyString("path") }.getOrNull()
-        if (path != null && StreamTuning.isNetworkUri(path)) maybePollPing(path)
-        delay(PING_REFRESH_INTERVAL_MS)
       }
     }
 
@@ -662,6 +651,7 @@ class PlayerViewModel(
   private companion object {
     const val TAG = "PlayerViewModel"
     const val HIDDEN_STREAM_STATS_REFRESH_SECONDS = 5
+    const val IP_WHOIS_REFRESH_INTERVAL_MS = 60_000L
     val VALID_SUBTITLE_EXTENSIONS =
       setOf(
         // Common & modern
@@ -2360,12 +2350,12 @@ class PlayerViewModel(
   private var lastHttpSampleMs = 0L
   private var lastVideoPlaying = false
   private var pingMs: Int? = null
-  private var pingPollInFlight = false
-  private var torrentStatsJob: Job? = null
   private var streamStatsGeneration = 0L
+  private var streamProtocol = ""
   private var ipWhoisDetails: IpWhoisDetails? = null
   private var ipWhoisLookupInFlight = false
   private var ipWhoisLookupGeneration = -1L
+  private var ipWhoisLastLookupMs = 0L
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2642,13 +2632,13 @@ class PlayerViewModel(
       _streamInfoAutoConsumed.value = false
       lastVideoPlaying = false
       pingMs = null
-      torrentStatsJob?.cancel()
-      torrentStatsJob = null
+      streamProtocol = ""
       lastHttpRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
       lastHttpSampleMs = SystemClock.elapsedRealtime()
       ipWhoisDetails = null
       ipWhoisLookupInFlight = false
       ipWhoisLookupGeneration = -1L
+      ipWhoisLastLookupMs = 0L
     }
     val isNetwork = path != null && StreamTuning.isNetworkUri(path)
     if (!isNetwork) {
@@ -2680,7 +2670,15 @@ class PlayerViewModel(
         val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
         Log.d(TAG, "Torrent stream detected: $infoHash, stats URL: $statsUrl")
       }
-      maybePollTorrentStats(path!!, infoHash)
+      val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
+      val currentTorrentStats = statsUrl?.let {
+        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchTorrentStats(it) }
+      }
+      currentTorrentStats?.let {
+        lastTorrentStats = it
+        if (it.hasWireData) lastKnownSeeds = it.seeds
+        maybePollSwarmSeeds(infoHash, it, streamStatsGeneration)
+      }
     }
 
     val bufferedSeconds =
@@ -2690,8 +2688,17 @@ class PlayerViewModel(
 
     val stats = if (infoHash != null) lastTorrentStats else null
     val isTorrent = infoHash != null
-    if (ipWhoisLookupGeneration != streamStatsGeneration && !ipWhoisLookupInFlight) {
+    if (streamProtocol.isBlank()) {
+      streamProtocol = if (isTorrent) "P2P" else Uri.parse(path).scheme?.uppercase().orEmpty()
+    }
+    val pingHost = extraPreferences.pingHost.get().trim()
+    val currentPingMs = withContext(Dispatchers.IO) { StreamStatsFetcher.fetchPingMs(pingHost) }
+    pingMs = currentPingMs
+    val now = SystemClock.elapsedRealtime()
+    if ((ipWhoisLookupGeneration != streamStatsGeneration ||
+        now - ipWhoisLastLookupMs >= IP_WHOIS_REFRESH_INTERVAL_MS) && !ipWhoisLookupInFlight) {
       ipWhoisLookupGeneration = streamStatsGeneration
+      ipWhoisLastLookupMs = now
       ipWhoisLookupInFlight = true
       val lookupGeneration = streamStatsGeneration
       viewModelScope.launch(Dispatchers.IO) {
@@ -2711,7 +2718,6 @@ class PlayerViewModel(
       }
     }
 
-    val now = SystemClock.elapsedRealtime()
     val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
     val httpSpeed = if (currentRxBytes != TrafficStats.UNSUPPORTED.toLong() &&
       lastHttpRxBytes != TrafficStats.UNSUPPORTED.toLong() && lastHttpSampleMs > 0L && now > lastHttpSampleMs) {
@@ -2750,53 +2756,14 @@ class PlayerViewModel(
         seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
         peers = stats?.peers ?: 0,
         swarmSeeds = swarmSeeds,
-        pingMs = pingMs,
+        pingMs = currentPingMs,
         pingTarget = extraPreferences.pingHost.get().trim(),
-        protocol = if (isTorrent) "P2P" else Uri.parse(path).scheme?.uppercase().orEmpty(),
+        protocol = streamProtocol,
         ip = ipWhoisDetails?.ip.orEmpty(),
         ipCountry = ipWhoisDetails?.country.orEmpty(),
         ipCountryFlag = ipWhoisDetails?.countryFlag.orEmpty(),
         speedBytesPerSec = speedBytesPerSec,
       )
-  }
-
-  private fun maybePollPing(path: String) {
-    if (pingPollInFlight) return
-    val pingHost = extraPreferences.pingHost.get().trim()
-    pingPollInFlight = true
-    viewModelScope.launch {
-      try {
-        val result = withContext(Dispatchers.IO) {
-          StreamStatsFetcher.fetchPingMs(pingHost)
-        }
-        if (lastStatsPath == path && extraPreferences.pingHost.get().trim() == pingHost &&
-          runCatching { MPVLib.getPropertyString("path") }.getOrNull() == path) {
-          pingMs = result
-          _streamStats.update { stats ->
-            if (stats.isNetwork) stats.copy(pingMs = result, pingTarget = pingHost) else stats
-          }
-        }
-      } finally {
-        pingPollInFlight = false
-      }
-    }
-  }
-
-  private fun maybePollTorrentStats(path: String, infoHash: String) {
-    if (torrentStatsJob?.isActive == true) return
-    val statsUrl = StreamStatsFetcher.buildStatsUrl(path, infoHash) ?: return
-    val generation = streamStatsGeneration
-    torrentStatsJob = viewModelScope.launch(Dispatchers.IO) {
-      val stats = StreamStatsFetcher.fetchTorrentStats(statsUrl) ?: return@launch
-      streamStatsMutex.withLock {
-        if (generation != streamStatsGeneration || lastStatsPath != path || activeInfoHash != infoHash) {
-          return@withLock
-        }
-        lastTorrentStats = stats
-        if (stats.hasWireData) lastKnownSeeds = stats.seeds
-        maybePollSwarmSeeds(infoHash, stats, generation)
-      }
-    }
   }
 
   private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats, generation: Long) {
@@ -2839,14 +2806,12 @@ class PlayerViewModel(
   }
 
   override fun onCleared() {
-    torrentStatsJob?.cancel()
     super.onCleared()
     _screenStateManager.cleanup()
     ambientModeManager.cleanup()
   }
 }
 
-private const val PING_REFRESH_INTERVAL_MS = 1_000L
 
 // Extension functions
 fun Float.normalize(
