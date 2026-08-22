@@ -1,4 +1,17 @@
-# mpvRex Stremio Edition 4.5.20
+# mpvRex Stremio Edition 4.5.21
+
+## Changed
+
+- Redesigned stream information as a compact, left-aligned vertical panel with
+  a subtle vertical guide line.
+- Centered the panel in the safe space between the player control areas so it
+  does not overlap the top bar or bottom controls.
+- Reduced the stream information text size and background opacity to match the
+  existing protocol identity styling.
+- P2P streams show seeds, peers, and swarm count; HTTP streams show only the
+  fields relevant to HTTP playback.
+
+## Previous Release
 
 ## Fixed
 

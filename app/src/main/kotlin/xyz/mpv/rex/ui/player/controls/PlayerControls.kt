@@ -95,7 +95,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1261,9 +1260,10 @@ fun PlayerControls(
             Modifier.constrainAs(streamInfoOverlay) {
               start.linkTo(parent.start)
               end.linkTo(parent.end)
-              top.linkTo(parent.top)
-              bottom.linkTo(parent.bottom)
-              verticalBias = 0.30f
+              top.linkTo(parent.top, margin = 96.dp)
+              bottom.linkTo(parent.bottom, margin = 96.dp)
+              horizontalBias = 0f
+              verticalBias = 0.5f
             },
         ) {
           StreamInfoOverlayContent(streamStats = streamStats)
@@ -2018,11 +2018,9 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
 
   Row(
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
     modifier = Modifier
-      .clip(RoundedCornerShape(12.dp))
-      .background(Color.Black.copy(alpha = 0.55f))
-      .padding(horizontal = 16.dp, vertical = 10.dp),
+      .padding(start = 16.dp, end = 16.dp)
+      .widthIn(max = 360.dp),
   ) {
     if (streamStats.fetchingMetadata) {
       CircularProgressIndicator(
@@ -2037,52 +2035,73 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
       )
     } else {
       val details = StreamStatsFetcher.formatStreamIdentity(streamStats)
-      val line =
-        if (streamStats.isTorrent) {
-          val swarmSeeds = streamStats.swarmSeeds
-          if (swarmSeeds != null) {
-            stringResource(
-              R.string.stream_stats_line_swarm,
-              bufferedSeconds,
-              streamStats.seeds,
-              streamStats.peers,
-              swarmSeeds,
-              pingText,
-              speedText,
-            )
-          } else {
-            stringResource(
-              R.string.stream_stats_line,
-              bufferedSeconds,
-              streamStats.seeds,
-              streamStats.peers,
-              pingText,
-              speedText,
-            )
-          }
-        } else {
-          stringResource(R.string.stream_stats_line_http, bufferedSeconds, pingText, speedText)
-        }
+      Box(
+        modifier = Modifier
+          .width(2.dp)
+          .height(124.dp)
+          .background(Color.White.copy(alpha = 0.42f)),
+      )
+      Spacer(modifier = Modifier.width(10.dp))
       Column(
         modifier = Modifier
-          .weight(1f)
-          .widthIn(max = 360.dp),
+          .clip(RoundedCornerShape(8.dp))
+          .background(Color.Black.copy(alpha = 0.22f))
+          .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
       ) {
+        Text(
+          text = details,
+          color = Color.White.copy(alpha = 0.78f),
+          style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+          text = "$bufferedSeconds s buffered",
+          color = Color.White.copy(alpha = 0.82f),
+          style = MaterialTheme.typography.labelSmall,
+        )
+        if (streamStats.ip.isNotBlank()) {
           Text(
-            text = details,
-            color = Color.White.copy(alpha = 0.72f),
+            text = "IP - ${streamStats.ip}",
+            color = Color.White.copy(alpha = 0.82f),
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.fillMaxWidth(),
-            overflow = TextOverflow.Clip,
+          )
+        }
+        if (streamStats.ipCountry.isNotBlank()) {
+          Text(
+            text = "Country - ${streamStats.ipCountry}${streamStats.ipCountryFlag.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()}",
+            color = Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
+        if (streamStats.isTorrent) {
+          Text(
+            text = "${streamStats.seeds} seeds",
+            color = Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.labelSmall,
           )
           Text(
-            text = line,
-            color = Color.White.copy(alpha = 0.95f),
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.fillMaxWidth(),
-            overflow = TextOverflow.Clip,
+            text = "${streamStats.peers} peers",
+            color = Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.labelSmall,
           )
+          streamStats.swarmSeeds?.let {
+            Text(
+              text = "$it in swarm",
+              color = Color.White.copy(alpha = 0.82f),
+              style = MaterialTheme.typography.labelSmall,
+            )
+          }
+        }
+        Text(
+          text = "Ping - $pingText",
+          color = Color.White.copy(alpha = 0.82f),
+          style = MaterialTheme.typography.labelSmall,
+        )
+        Text(
+          text = "Speed - $speedText",
+          color = Color.White.copy(alpha = 0.82f),
+          style = MaterialTheme.typography.labelSmall,
+        )
       }
     }
   }
