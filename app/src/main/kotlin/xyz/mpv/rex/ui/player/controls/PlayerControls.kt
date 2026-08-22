@@ -95,6 +95,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -2062,26 +2063,26 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
         } else {
           stringResource(R.string.stream_stats_line_http, bufferedSeconds, pingText, speedText)
         }
-      Column {
-        Box(modifier = Modifier.widthIn(min = 260.dp, max = 360.dp)) {
+      Column(
+        modifier = Modifier
+          .weight(1f)
+          .widthIn(max = 360.dp),
+      ) {
           Text(
             text = details,
             color = Color.White.copy(alpha = 0.72f),
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            softWrap = false,
+            modifier = Modifier.fillMaxWidth(),
+            overflow = TextOverflow.Clip,
           )
-        }
-        Box(modifier = Modifier.widthIn(min = 260.dp, max = 360.dp)) {
           Text(
             text = line,
             color = Color.White.copy(alpha = 0.95f),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            softWrap = false,
+            modifier = Modifier.fillMaxWidth(),
+            overflow = TextOverflow.Clip,
           )
-        }
       }
     }
   }

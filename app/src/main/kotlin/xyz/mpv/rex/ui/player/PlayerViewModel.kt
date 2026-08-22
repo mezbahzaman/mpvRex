@@ -40,6 +40,8 @@ import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
@@ -57,6 +59,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -492,17 +495,12 @@ class PlayerViewModel(
 
     // Poll all live stream information at the user-selected cadence.
     viewModelScope.launch {
+      var nextStatsUpdateMs = SystemClock.elapsedRealtime()
       while (isActive) {
         updateStreamStats()
-        val pathAvailable = runCatching { MPVLib.getPropertyString("path") }.getOrNull() != null
-        val refreshSeconds = if (streamStatsPanelVisible.value && pathAvailable) {
-          1
-        } else if (!pathAvailable) {
-          1
-        } else {
-          HIDDEN_STREAM_STATS_REFRESH_SECONDS
-        }
-        delay(refreshSeconds * 1000L)
+        nextStatsUpdateMs += 1000L
+        val waitMs = nextStatsUpdateMs - SystemClock.elapsedRealtime()
+        if (waitMs > 0L) delay(waitMs) else nextStatsUpdateMs = SystemClock.elapsedRealtime()
       }
     }
 
@@ -650,7 +648,6 @@ class PlayerViewModel(
 
   private companion object {
     const val TAG = "PlayerViewModel"
-    const val HIDDEN_STREAM_STATS_REFRESH_SECONDS = 5
     const val IP_WHOIS_REFRESH_INTERVAL_MS = 60_000L
     val VALID_SUBTITLE_EXTENSIONS =
       setOf(
@@ -2657,7 +2654,22 @@ class PlayerViewModel(
     }
     val infoHash = path?.takeIf(StreamTuning::isStremioTorrentUri)
       ?.let(StreamStatsFetcher::parseInfoHash)
-    if (infoHash != null) {
+    coroutineScope {
+      val torrentStatsDeferred = if (infoHash != null) {
+        val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
+        async(Dispatchers.IO) {
+          withTimeoutOrNull(900L) {
+            statsUrl?.let(StreamStatsFetcher::fetchTorrentStats)
+          }
+        }
+      } else null
+      val pingDeferred = async(Dispatchers.IO) {
+        withTimeoutOrNull(900L) {
+          StreamStatsFetcher.fetchPingMs(extraPreferences.pingHost.get().trim())
+        }
+      }
+
+      if (infoHash != null) {
       if (infoHash != activeInfoHash) {
         activeInfoHash = infoHash
         lastTorrentStats = null
@@ -2670,16 +2682,13 @@ class PlayerViewModel(
         val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
         Log.d(TAG, "Torrent stream detected: $infoHash, stats URL: $statsUrl")
       }
-      val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
-      val currentTorrentStats = statsUrl?.let {
-        withContext(Dispatchers.IO) { StreamStatsFetcher.fetchTorrentStats(it) }
-      }
+      val currentTorrentStats = torrentStatsDeferred?.await()
       currentTorrentStats?.let {
         lastTorrentStats = it
         if (it.hasWireData) lastKnownSeeds = it.seeds
         maybePollSwarmSeeds(infoHash, it, streamStatsGeneration)
       }
-    }
+      }
 
     val bufferedSeconds =
       (runCatching { MPVLib.getPropertyDouble("demuxer-cache-duration") }.getOrNull() ?: 0.0)
@@ -2691,8 +2700,7 @@ class PlayerViewModel(
     if (streamProtocol.isBlank()) {
       streamProtocol = if (isTorrent) "P2P" else Uri.parse(path).scheme?.uppercase().orEmpty()
     }
-    val pingHost = extraPreferences.pingHost.get().trim()
-    val currentPingMs = withContext(Dispatchers.IO) { StreamStatsFetcher.fetchPingMs(pingHost) }
+    val currentPingMs = pingDeferred.await()
     pingMs = currentPingMs
     val now = SystemClock.elapsedRealtime()
     if ((ipWhoisLookupGeneration != streamStatsGeneration ||
@@ -2764,6 +2772,7 @@ class PlayerViewModel(
         ipCountryFlag = ipWhoisDetails?.countryFlag.orEmpty(),
         speedBytesPerSec = speedBytesPerSec,
       )
+    }
   }
 
   private fun maybePollSwarmSeeds(infoHash: String, stats: TorrentStats, generation: Long) {

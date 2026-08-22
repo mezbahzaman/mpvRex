@@ -1,4 +1,15 @@
-# mpvRex Stremio Edition 4.5.19
+# mpvRex Stremio Edition 4.5.20
+
+## Fixed
+
+- Stream information now wraps within the available overlay width instead of
+  clipping long identity and metrics lines.
+- Stream metrics use fixed one-second deadlines so slow network probes do not
+  add their duration to the next refresh interval.
+- Ping and torrent statistics requests run concurrently with bounded timeouts,
+  keeping the visible stream information responsive.
+
+## Previous Release
 
 ## Changed
 
