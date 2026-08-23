@@ -574,6 +574,8 @@ class PlayerViewModel(
         controlsVisible || seekbarVisible || gestureSeeking
       }.collectLatest { shouldPoll ->
         if (shouldPoll) {
+          // 50ms keeps the seekbar visually smooth (Seekbar tweens over 200ms between
+          // samples) while costing a fraction of the CPU a 60fps loop burns.
           while (isActive) {
             val time = MPVLib.getPropertyDouble("time-pos")
             if (time != null) {
@@ -582,13 +584,13 @@ class PlayerViewModel(
                 if (time >= primaryDur - 0.25) {
                   _precisePosition.value = primaryDur.toFloat()
                   _externalAudioEofEvent.tryEmit(Unit)
-                  delay(16)
+                  delay(50)
                   continue
                 }
               }
               _precisePosition.value = time.toFloat()
             }
-            delay(16) // ~60fps updates
+            delay(50)
           }
         }
       }

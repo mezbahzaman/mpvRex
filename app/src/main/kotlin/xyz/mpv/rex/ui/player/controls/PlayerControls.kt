@@ -77,6 +77,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -263,25 +264,35 @@ fun PlayerControls(
   val isGestureSeeking by viewModel.isGestureSeeking.collectAsState()
   val isVerticalGestureActive by viewModel.isVerticalGestureActive.collectAsState()
 
-  LaunchedEffect(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts, precisePosition, settlingSeekTarget) {
+  // Keyed only on the seek target: high-frequency inputs (position, cache floats) are
+  // observed inside snapshotFlow so idle playback no longer restarts this effect
+  // on every position tick.
+  LaunchedEffect(settlingSeekTarget) {
     val target = settlingSeekTarget ?: return@LaunchedEffect
-    val currentCache = listOf(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts)
-    if (abs(precisePosition - target) <= 2f && cacheSnapshotAtTarget == null) {
-      // This may still be mpv's final pre-seek sample. Keep it hidden and wait
-      // for one cache update measured after playback reached the new position.
-      cacheSnapshotAtTarget = currentCache
-    }
-    val ready = isCacheStateReadyAfterSeek(
-      readerPts = demuxerReaderPts,
-      currentPosition = precisePosition,
-      seekTarget = target,
-      cacheChangedAfterSeek = cacheSnapshotAtSeek != currentCache,
-      cacheChangedAfterTarget = cacheSnapshotAtTarget?.let { it != currentCache } == true,
-    )
-    if (ready) {
-      settlingSeekTarget = null
-      cacheSnapshotAtSeek = emptyList()
-      cacheSnapshotAtTarget = null
+    snapshotFlow {
+      Pair(
+        Triple(demuxerCacheEnd, demuxerCacheDuration, demuxerReaderPts),
+        precisePosition,
+      )
+    }.collect { (cacheTriple, position) ->
+      val currentCache = listOf(cacheTriple.first, cacheTriple.second, cacheTriple.third)
+      if (abs(position - target) <= 2f && cacheSnapshotAtTarget == null) {
+        // This may still be mpv's final pre-seek sample. Keep it hidden and wait
+        // for one cache update measured after playback reached the new position.
+        cacheSnapshotAtTarget = currentCache
+      }
+      val ready = isCacheStateReadyAfterSeek(
+        readerPts = cacheTriple.third,
+        currentPosition = position,
+        seekTarget = target,
+        cacheChangedAfterSeek = cacheSnapshotAtSeek != currentCache,
+        cacheChangedAfterTarget = cacheSnapshotAtTarget?.let { it != currentCache } == true,
+      )
+      if (ready) {
+        settlingSeekTarget = null
+        cacheSnapshotAtSeek = emptyList()
+        cacheSnapshotAtTarget = null
+      }
     }
   }
 
