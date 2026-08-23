@@ -1,4 +1,21 @@
-# mpvRex Stremio Edition 4.5.24
+# mpvRex Stremio Edition 4.5.25
+
+## Changed
+
+- Removed the ipwho.is public-IP, country, and flag lookup implementation and
+  its stream-info fields.
+- Kept stream protocol and local playback metrics in the overlay without an
+  external geolocation dependency.
+
+## Fixed
+
+- Reduced battery and network overhead from stream statistics polling.
+- Expensive ping and torrent-stat requests are now throttled while the overlay
+  is visible and slowed further when it is hidden.
+- One-second local metric updates no longer launch a ping process or perform a
+  torrent HTTP request on every cycle.
+
+## Previous Release
 
 ## Added
 
