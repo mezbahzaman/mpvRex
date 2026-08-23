@@ -1,4 +1,14 @@
-# mpvRex Stremio Edition 4.5.28
+# mpvRex Stremio Edition 4.5.29
+
+## Fixed
+
+- All stream-info reads now run under one cancellable active job.
+- Closing or auto-dismissing the overlay cancels the immediate read as well as
+  the repeating cycle; no untracked ping, torrent, swarm, or IP operation is
+  started in the background.
+- New playback paths reset the startup info state and begin a fresh active read.
+
+## Previous Release
 
 ## Fixed
 

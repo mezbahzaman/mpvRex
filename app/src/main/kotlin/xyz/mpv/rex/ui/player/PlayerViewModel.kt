@@ -514,7 +514,11 @@ class PlayerViewModel(
 
     // A new mpv path resets auto-display state and wakes the gated stats loop.
     viewModelScope.launch {
-      MPVLib.propString["path"].collect { updateStreamStats() }
+      MPVLib.propString["path"].collect {
+        streamStatsPanelVisible.value = false
+        _streamInfoDismissed.value = false
+        _streamInfoAutoConsumed.value = false
+      }
     }
 
     // Auto-download subtitles for eligible streams and local files without subtitles.
@@ -2373,7 +2377,6 @@ class PlayerViewModel(
     ipWhoisLoadedGeneration = -1L
     lastPingPollMs = 0L
     lastTorrentStatsPollMs = 0L
-    viewModelScope.launch { updateStreamStats() }
   }
 
   fun dismissStreamInfo() {
