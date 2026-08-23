@@ -3,12 +3,17 @@ package xyz.mpv.rex.preferences
 import xyz.mpv.rex.preferences.preference.PreferenceStore
 import xyz.mpv.rex.preferences.preference.getEnum
 import xyz.mpv.rex.ui.player.Debanding
+import xyz.mpv.rex.ui.player.HwDecPriority
 
 class DecoderPreferences(
   preferenceStore: PreferenceStore,
 ) {
   val profile = preferenceStore.getString("mpv_profile", "fast")
   val tryHWDecoding = preferenceStore.getBoolean("try_hw_dec", true)
+
+  // Default decoder fallback order (first -> second -> automatic last resort).
+  val hwdecPriorityFirst = preferenceStore.getEnum("hwdec_priority_first", HwDecPriority.HW_PLUS)
+  val hwdecPrioritySecond = preferenceStore.getEnum("hwdec_priority_second", HwDecPriority.HW)
   val gpuNext = preferenceStore.getBoolean("gpu_next")
   val useVulkan = preferenceStore.getBoolean("use_vulkan", false)
   val useYUV420P = preferenceStore.getBoolean("use_yuv420p", false)

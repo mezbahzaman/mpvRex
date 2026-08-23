@@ -216,6 +216,10 @@
     <string name="pref_decoder_summary">হার্ডওয়্যার ডিকোডিং, পিক্সেল ফরম্যাট, ডিব্যান্ডিং</string>
     <string name="pref_decoder_profile_title">MPV প্রোফাইল</string>
     <string name="pref_decoder_try_hw_dec_title">হার্ডওয়্যার ডিকোডিং চেষ্টা করুন</string>
+    <string name="pref_decoder_priority_first_title">ডিফল্ট ডিকোডার – ১ম অগ্রাধিকার</string>
+    <string name="pref_decoder_priority_second_title">ডিফল্ট ডিকোডার – ২য় অগ্রাধিকার</string>
+    <string name="pref_decoder_priority_third_title">ডিফল্ট ডিকোডার – ৩য় ফলব্যাক</string>
+    <string name="pref_decoder_priority_third_summary">%1$s (স্বয়ংক্রিয়ভাবে নির্বাচিত)</string>
     <string name="pref_decoder_gpu_next_title">Gpu-next ব্যবহার করুন</string>
     <string name="pref_decoder_gpu_next_summary">একটি নতুন রেন্ডারিং ব্যাকএন্ড</string>
     <string name="pref_decoder_gpu_next_enable_title">Gpu-next চালু করবেন?</string>

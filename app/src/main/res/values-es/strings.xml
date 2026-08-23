@@ -245,6 +245,10 @@ Next: NEXT</string>
     <string name="pref_decoder_summary">Decodificación de hardware, formato de píxel, debanding</string>
     <string name="pref_decoder_profile_title">Perfil de MPV</string>
     <string name="pref_decoder_try_hw_dec_title">Intentar decodificación por hardware</string>
+    <string name="pref_decoder_priority_first_title">Decodificador predeterminado – 1.ª prioridad</string>
+    <string name="pref_decoder_priority_second_title">Decodificador predeterminado – 2.ª prioridad</string>
+    <string name="pref_decoder_priority_third_title">Decodificador predeterminado – 3.er respaldo</string>
+    <string name="pref_decoder_priority_third_summary">%1$s (elegido automáticamente)</string>
     <string name="pref_decoder_gpu_next_title">Usar gpu-next</string>
     <string name="pref_decoder_gpu_next_summary">Un nuevo motor de renderizado</string>
     <string name="pref_decoder_gpu_next_enable_title">¿Activar gpu-next?</string>

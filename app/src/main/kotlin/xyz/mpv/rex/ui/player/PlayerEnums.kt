@@ -75,6 +75,41 @@ enum class Decoder(
   }
 }
 
+/**
+ * User-configurable default decoder fallback order (Settings > Decoder).
+ * Playback tries the first priority, then the second, then the remaining
+ * decoder as an automatic last resort.
+ */
+enum class HwDecPriority(
+  val title: String,
+  val mpvValue: String,
+) {
+  HW_PLUS("HW+", "mediacodec"),
+  HW("HW", "mediacodec-copy"),
+  SW("SW", "no"),
+  ;
+
+  companion object {
+    /**
+     * Builds the mpv `hwdec` chain from the two saved priorities; whichever
+     * decoder was not picked becomes the automatic third fallback.
+     */
+    fun buildHwdecChain(
+      first: HwDecPriority,
+      second: HwDecPriority,
+    ): String {
+      val ordered = buildList {
+        add(first)
+        if (second != first) add(second)
+      }
+      val lastResort = entries.first { it !in ordered }
+      return (ordered + lastResort).joinToString(",") { it.mpvValue }
+    }
+  }
+
+  override fun toString(): String = title
+}
+
 enum class Debanding(
   @StringRes val titleRes: Int,
 ) {

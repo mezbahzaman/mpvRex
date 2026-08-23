@@ -265,6 +265,10 @@
     <string name="pref_decoder_summary">Hardware decoding, pixel format, debanding</string>
     <string name="pref_decoder_profile_title">MPV Profile</string>
     <string name="pref_decoder_try_hw_dec_title">Try hardware decoding</string>
+    <string name="pref_decoder_priority_first_title">Default decoder – 1st priority</string>
+    <string name="pref_decoder_priority_second_title">Default decoder – 2nd priority</string>
+    <string name="pref_decoder_priority_third_title">Default decoder – 3rd fallback</string>
+    <string name="pref_decoder_priority_third_summary">%1$s (chosen automatically)</string>
     <string name="pref_decoder_gpu_next_title">Use gpu-next</string>
     <string name="pref_decoder_gpu_next_summary">A new rendering backend</string>
     <string name="pref_decoder_gpu_next_enable_title">Enable gpu-next?</string>

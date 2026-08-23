@@ -244,6 +244,10 @@
     <string name="pref_decoder_summary">硬件解码、像素格式、色带消除</string>
     <string name="pref_decoder_profile_title">MPV 配置方案</string>
     <string name="pref_decoder_try_hw_dec_title">尝试启用硬件解码</string>
+    <string name="pref_decoder_priority_first_title">默认解码器 – 第一优先级</string>
+    <string name="pref_decoder_priority_second_title">默认解码器 – 第二优先级</string>
+    <string name="pref_decoder_priority_third_title">默认解码器 – 第三后备</string>
+    <string name="pref_decoder_priority_third_summary">%1$s（自动选择）</string>
     <string name="pref_decoder_gpu_next_title">启用 gpu-next</string>
     <string name="pref_decoder_gpu_next_summary">全新渲染后端</string>
     <string name="pref_decoder_gpu_next_enable_title">启用 gpu-next？</string>

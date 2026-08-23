@@ -239,6 +239,10 @@
     <string name="pref_decoder_summary">فك الترميز بالعتاد، تنسيق البكسل، إزالة التعرج اللوني</string>
     <string name="pref_decoder_profile_title">ملف تعريف MPV</string>
     <string name="pref_decoder_try_hw_dec_title">محاولة فك الترميز بالعتاد</string>
+    <string name="pref_decoder_priority_first_title">المفكك الافتراضي – الأولوية الأولى</string>
+    <string name="pref_decoder_priority_second_title">المفكك الافتراضي – الأولوية الثانية</string>
+    <string name="pref_decoder_priority_third_title">المفكك الافتراضي – الاحتياطي الثالث</string>
+    <string name="pref_decoder_priority_third_summary">%1$s (يُختار تلقائيًا)</string>
     <string name="pref_decoder_gpu_next_title">استخدام gpu-next</string>
     <string name="pref_decoder_gpu_next_summary">خلفية عرض جديدة</string>
     <string name="pref_decoder_gpu_next_enable_title">تفعيل gpu-next؟</string>

@@ -42,6 +42,7 @@ import xyz.mpv.rex.preferences.preference.collectAsState
 import xyz.mpv.rex.domain.hdr.HdrToysManager
 import xyz.mpv.rex.presentation.Screen
 import xyz.mpv.rex.ui.player.Debanding
+import xyz.mpv.rex.ui.player.HwDecPriority
 import xyz.mpv.rex.ui.player.MPVProfile
 import xyz.mpv.rex.ui.utils.LocalBackStack
 import xyz.mpv.rex.ui.preferences.VulkanUtils
@@ -123,6 +124,59 @@ object DecoderPreferencesScreen : Screen {
                   preferences.tryHWDecoding.set(it)
                 },
                 title = { Text(stringResource(R.string.pref_decoder_try_hw_dec_title)) },
+              )
+
+              PreferenceDivider()
+
+              // Default decoder fallback order: 1st -> 2nd -> automatic last resort.
+              val hwPriorityFirst by preferences.hwdecPriorityFirst.collectAsState()
+              val hwPrioritySecondSaved by preferences.hwdecPrioritySecond.collectAsState()
+              // Heal stale saved states where the second priority equals the first.
+              val hwPrioritySecond =
+                if (hwPrioritySecondSaved != hwPriorityFirst) hwPrioritySecondSaved
+                else HwDecPriority.entries.first { it != hwPriorityFirst }
+              val hwPriorityLastResort =
+                HwDecPriority.entries.first { it != hwPriorityFirst && it != hwPrioritySecond }
+
+              me.zhanghai.compose.preference.ListPreference(
+                value = hwPriorityFirst,
+                onValueChange = { preferences.hwdecPriorityFirst.set(it) },
+                values = HwDecPriority.entries,
+                title = { Text(stringResource(R.string.pref_decoder_priority_first_title)) },
+                summary = {
+                  Text(
+                    hwPriorityFirst.title,
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              me.zhanghai.compose.preference.ListPreference(
+                value = hwPrioritySecond,
+                onValueChange = { preferences.hwdecPrioritySecond.set(it) },
+                values = HwDecPriority.entries.filter { it != hwPriorityFirst },
+                title = { Text(stringResource(R.string.pref_decoder_priority_second_title)) },
+                summary = {
+                  Text(
+                    hwPrioritySecond.title,
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+              )
+
+              PreferenceDivider()
+
+              me.zhanghai.compose.preference.Preference(
+                title = { Text(stringResource(R.string.pref_decoder_priority_third_title)) },
+                summary = {
+                  Text(
+                    stringResource(R.string.pref_decoder_priority_third_summary, hwPriorityLastResort.title),
+                    color = MaterialTheme.colorScheme.outline,
+                  )
+                },
+                onClick = {},
               )
 
               PreferenceDivider()

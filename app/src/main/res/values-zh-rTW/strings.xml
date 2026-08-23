@@ -221,6 +221,10 @@
     <string name="pref_decoder_summary">硬體解碼、像素格式、去帶 (Debanding)</string>
     <string name="pref_decoder_profile_title">MPV 設定檔</string>
     <string name="pref_decoder_try_hw_dec_title">嘗試硬體解碼</string>
+    <string name="pref_decoder_priority_first_title">預設解碼器 – 第一優先順序</string>
+    <string name="pref_decoder_priority_second_title">預設解碼器 – 第二優先順序</string>
+    <string name="pref_decoder_priority_third_title">預設解碼器 – 第三後備</string>
+    <string name="pref_decoder_priority_third_summary">%1$s（自動選擇）</string>
     <string name="pref_decoder_gpu_next_title">使用 gpu-next</string>
     <string name="pref_decoder_gpu_next_summary">新的渲染後端</string>
     <string name="pref_decoder_gpu_next_enable_title">啟用 gpu-next？</string>
