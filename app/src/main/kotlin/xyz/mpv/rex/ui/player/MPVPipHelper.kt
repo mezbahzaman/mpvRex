@@ -44,6 +44,8 @@ class MPVPipHelper(
 
   @Suppress("UnspecifiedRegisterReceiverFlag")
   private fun registerPipReceiver() {
+    // Rapid double enter-PiP events must not orphan a previous registration.
+    if (pipReceiver != null) return
     pipReceiver =
       object : BroadcastReceiver() {
         override fun onReceive(

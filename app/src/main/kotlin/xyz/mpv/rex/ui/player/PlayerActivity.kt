@@ -296,6 +296,12 @@ class PlayerActivity :
    */
   private var restoreAudioFocus: () -> Unit = {}
 
+  /**
+   * Tracks whether we currently own audio focus. Comparing [restoreAudioFocus] against
+   * `{}` is unreliable because non-capturing Kotlin lambdas share a single instance.
+   */
+  private var hasAudioFocus = false
+
   // ==================== Broadcast Receivers ====================
 
   /**
@@ -324,6 +330,7 @@ class PlayerActivity :
         AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
           -> {
           // Save current state to restore later
+          hasAudioFocus = false
           val oldRestore = restoreAudioFocus
           val wasPlayerPaused = viewModel.paused ?: false
           viewModel.pause()
@@ -343,6 +350,7 @@ class PlayerActivity :
 
         AudioManager.AUDIOFOCUS_GAIN -> {
           // Restore previous audio state
+          hasAudioFocus = true
           restoreAudioFocus()
           restoreAudioFocus = {}
         }
@@ -694,16 +702,19 @@ class PlayerActivity :
     val result = audioManager.requestAudioFocus(req)
     return when (result) {
       AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> {
+        hasAudioFocus = true
         restoreAudioFocus = {}
         true
       }
 
       AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> {
+        hasAudioFocus = false
         restoreAudioFocus = { requestAudioFocus() }
         false
       }
 
       else -> {
+        hasAudioFocus = false
         restoreAudioFocus = {}
         false
       }
@@ -820,8 +831,11 @@ class PlayerActivity :
   }
 
   override fun abandonAudioFocus() {
-    if (restoreAudioFocus != {}) {
-      audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+    if (hasAudioFocus) {
+      hasAudioFocus = false
+      audioFocusRequest?.let {
+        runCatching { audioManager.abandonAudioFocusRequest(it) }
+      }
       restoreAudioFocus = {}
     }
   }
@@ -1352,7 +1366,11 @@ class PlayerActivity :
   private fun applyStreamTuning(uri: String?) {
     StreamTuning.applyTuningForUri(
       uri = uri,
-      maximumDownloadMiB = extraPreferences.maximumNetworkDownloadMiB.get(),
+      maximumDownloadMiB = StreamTuning.resolveNetworkDownloadMiB(
+        this,
+        extraPreferences.maximumNetworkDownloadMiB.get(),
+        extraPreferences.maximumNetworkDownloadMiB.isSet(),
+      ),
       maximumBufferedSeconds = extraPreferences.maximumBufferedSeconds.get(),
     )
   }
@@ -2694,7 +2712,7 @@ class PlayerActivity :
     Log.d(TAG, "Setting external-player result: position=${positionMs}ms duration=${durationMs}ms")
     setResult(RESULT_OK, StremioHandoff.resultIntent(positionMs, durationMs))
     if (isStremioHandoff(intent)) {
-      StremioProgressSnapshot.save(this, positionMs, durationMs, true)
+      StremioProgressSnapshot.saveAwaitingWrite(this, positionMs, durationMs, true)
     }
     returnResultSet = true
   }

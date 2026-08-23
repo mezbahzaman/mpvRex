@@ -290,7 +290,11 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
     val playable = uri.resolveUri(appContext) ?: uri.toString()
     StreamTuning.applyTuningForUri(
       playable,
-      extraPreferences.maximumNetworkDownloadMiB.get(),
+      StreamTuning.resolveNetworkDownloadMiB(
+        appContext,
+        extraPreferences.maximumNetworkDownloadMiB.get(),
+        extraPreferences.maximumNetworkDownloadMiB.isSet(),
+      ),
       extraPreferences.maximumBufferedSeconds.get(),
     )
     runCatching { MPVLib.command("loadfile", playable) }
@@ -553,6 +557,15 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
     activeTitle = ""
     shuffledIndices = emptyList()
     shuffledPosition = -1
+
+    // Playlist exhausted: tear down the foreground service and its stale notification,
+    // mirroring what closing the mini-player does. Without this the service lingers
+    // indefinitely after auto-advance finishes.
+    runCatching {
+      miniPlayerStateManager.clearState()
+      appContext.stopService(Intent(appContext, MediaPlaybackService::class.java))
+    }
+
     Log.d(TAG, "Headless playback stopped; native MPV retained idle")
   }
 

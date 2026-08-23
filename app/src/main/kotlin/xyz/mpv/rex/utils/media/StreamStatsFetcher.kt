@@ -60,8 +60,31 @@ data class TorrentStats(
 object StreamStatsFetcher {
 
   private const val STATS_TIMEOUT_MS = 1500
+  private const val MAX_JSON_RESPONSE_CHARS = 1 shl 20
+  private const val MAX_TRACKER_RESPONSE_BYTES = 64 shl 10
   private val INFO_HASH_REGEX = Regex("[0-9a-fA-F]{40}")
   private val PING_TIME_REGEX = Regex("time[=<]([0-9]+(?:\\.[0-9]+)?)\\s*ms", RegexOption.IGNORE_CASE)
+
+  /** Reads at most [maxChars] chars so a hostile/broken endpoint cannot balloon memory. */
+  private fun java.io.Reader.readTextCapped(maxChars: Int = MAX_JSON_RESPONSE_CHARS): String {
+    val buffer = CharArray(maxChars)
+    val read = runCatching { read(buffer) }.getOrDefault(-1)
+    return if (read <= 0) "" else String(buffer, 0, read)
+  }
+
+  /** Byte-faithful bounded read (bencode payloads must survive as ISO-8859-1). */
+  private fun java.io.InputStream.readBytesBounded(maxBytes: Int = MAX_TRACKER_RESPONSE_BYTES): ByteArray {
+    val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 4096))
+    val chunk = ByteArray(8192)
+    var total = 0
+    while (total < maxBytes) {
+      val n = read(chunk, 0, minOf(chunk.size, maxBytes - total))
+      if (n < 0) break
+      output.write(chunk, 0, n)
+      total += n
+    }
+    return output.toByteArray()
+  }
 
   /** Returns ICMP latency to the configured host, or null when the probe times out/fails. */
   fun fetchPingMs(host: String = "google.com"): Int? {
@@ -75,7 +98,7 @@ object StreamStatsFetcher {
         process.destroyForcibly()
         return null
       }
-      val output = process.inputStream.bufferedReader().use { it.readText() }
+      val output = process.inputStream.bufferedReader().use { it.readTextCapped(64 shl 10) }
       parsePingMs(output)
     } catch (_: Exception) {
       null
@@ -94,7 +117,7 @@ object StreamStatsFetcher {
       connection.requestMethod = "GET"
       connection.setRequestProperty("Accept", "application/json")
       if (connection.responseCode !in 200..299) return null
-      parseIpWhoisDetails(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
+      parseIpWhoisDetails(JSONObject(connection.inputStream.bufferedReader().use { it.readTextCapped() }))
     } catch (_: Exception) {
       null
     } finally {
@@ -156,7 +179,7 @@ object StreamStatsFetcher {
       if (connection.responseCode !in 200..299) {
         null
       } else {
-        val text = connection.inputStream.bufferedReader().use { it.readText() }
+        val text = connection.inputStream.bufferedReader().use { it.readTextCapped() }
         val json = JSONObject(text)
         val filesReady = (json.optJSONArray("files")?.length() ?: 0) > 0
         if (!filesReady) {
@@ -220,7 +243,7 @@ object StreamStatsFetcher {
         connection.requestMethod = "GET"
         connection.setRequestProperty("User-Agent", "mpvRex/4.5")
         if (connection.responseCode in 200..299) {
-          val body = connection.inputStream.readBytes().toString(Charsets.ISO_8859_1)
+          val body = connection.inputStream.readBytesBounded().toString(Charsets.ISO_8859_1)
           bencodeInt(body, "complete")
         } else null
       } catch (_: Exception) {

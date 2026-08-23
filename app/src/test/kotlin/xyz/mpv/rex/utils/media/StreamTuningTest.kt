@@ -12,22 +12,30 @@ class StreamTuningTest {
   }
 
   @Test
-  fun zeroByteLimitDisablesOnlyByteThreshold() {
+  fun zeroByteLimitFallsBackToBoundedFloor() {
     assertEquals("180", StreamTuning.cacheLimits(0, 180).readaheadSeconds)
-    assertEquals("4611686018427387903", StreamTuning.cacheLimits(0, 180).maximumBytes)
+    assertEquals("8MiB", StreamTuning.cacheLimits(0, 180).maximumBytes)
   }
 
   @Test
-  fun zeroSecondLimitDisablesOnlyTimeThreshold() {
+  fun zeroSecondLimitFallsBackToBoundedFloor() {
     assertEquals("200MiB", StreamTuning.cacheLimits(200, 0).maximumBytes)
-    assertEquals("1.7976931348623157e308", StreamTuning.cacheLimits(200, 0).readaheadSeconds)
+    assertEquals("10", StreamTuning.cacheLimits(200, 0).readaheadSeconds)
   }
 
   @Test
-  fun bothZeroLimitsDisableBothThresholds() {
+  fun bothZeroLimitsFallBackToBoundedFloors() {
     assertEquals(
-      StreamTuning.CacheLimits("4611686018427387903", "1.7976931348623157e308"),
+      StreamTuning.CacheLimits("8MiB", "10"),
       StreamTuning.cacheLimits(0, 0),
+    )
+  }
+
+  @Test
+  fun oversizedLimitsAreClamped() {
+    assertEquals(
+      StreamTuning.CacheLimits("4096MiB", "3600"),
+      StreamTuning.cacheLimits(8192, 7200),
     )
   }
 
