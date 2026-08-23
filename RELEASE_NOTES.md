@@ -1,4 +1,4 @@
-# mpvRex Stremio Edition 4.5.25
+# mpvRex Stremio Edition 4.5.26
 
 ## Changed
 

@@ -2741,7 +2741,7 @@ class PlayerViewModel(
         seeds = if (stats != null && stats.hasWireData) stats.seeds else lastKnownSeeds,
         peers = stats?.peers ?: 0,
         swarmSeeds = swarmSeeds,
-        pingMs = currentPingMs,
+        pingMs = pingMs,
         pingTarget = extraPreferences.pingHost.get().trim(),
         protocol = streamProtocol,
         speedBytesPerSec = speedBytesPerSec,
