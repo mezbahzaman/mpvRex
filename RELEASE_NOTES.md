@@ -1,4 +1,44 @@
-# mpvRex Stremio Edition 4.5.29
+# mpvRex Stremio Edition 4.5.30
+
+## Added
+
+- Decoder priority settings (Settings > Decoder): pick the default decoder
+  1st and 2nd priority from HW+ / HW / SW; the remaining decoder becomes an
+  automatic last resort, giving a full three-step fallback chain
+  (for example HW+ → HW → SW). Applies to new playback sessions; the
+  in-player per-video decoder override still wins when used.
+
+## Fixed
+
+- Audio focus is now released correctly after a clean grant; previously it
+  was held until process death and could delay other apps' audio.
+- Ending a background playlist no longer leaves the foreground service and a
+  stale notification running indefinitely.
+- Stremio progress snapshots are written off the main thread through an
+  ordered writer; crash durability is preserved and per-second UI stalls are
+  gone.
+- Bounded demuxer cache floors: setting a zero limit now selects a small
+  bounded cache instead of an unbounded one that could grow until OOM.
+- Thumbnail, tracker, whois, and ping responses are size-bounded reads.
+- Picture-in-Picture control receiver can no longer be registered twice.
+
+## Changed
+
+- Memory: thumbnails decode at the size actually displayed instead of always
+  1024 px, heavy extraction is capped at two concurrent jobs, folder
+  generation stops when its screen closes, disk thumbnails use JPEG q85,
+  embedded-art/frame caches are byte-budgeted, and devices with ≤4 GB RAM get
+  a smaller default network download budget (96 MiB) unless configured.
+- Battery/CPU: precise-position polling dropped from ~60 fps to ~20 fps with
+  identical seekbar smoothness, and seek-settling logic no longer restarts on
+  every position tick.
+- Network streams start more resiliently: larger stream buffer plus silent
+  lavf reconnection on dropped HTTP connections for P2P and HTTP playback.
+- Default decoder chain is now HW+ → HW → SW (previously HW+ → SW), so a
+  failing direct hardware decode falls back to copy-mode hardware before
+  software.
+
+## Previous Release
 
 ## Fixed
 
