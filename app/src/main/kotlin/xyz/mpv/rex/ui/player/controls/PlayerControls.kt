@@ -2055,6 +2055,16 @@ private fun StreamInfoOverlayContent(streamStats: StreamStats) {
           color = Color.White.copy(alpha = 0.78f),
           style = MaterialTheme.typography.labelSmall,
         )
+        if (streamStats.ip.isNotBlank()) {
+          Text("IP - ${streamStats.ip}", color = Color.White.copy(alpha = 0.82f), style = MaterialTheme.typography.labelSmall)
+        }
+        if (streamStats.ipCountry.isNotBlank()) {
+          Text(
+            "Country - ${streamStats.ipCountry}${streamStats.ipCountryFlag.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()}",
+            color = Color.White.copy(alpha = 0.82f),
+            style = MaterialTheme.typography.labelSmall,
+          )
+        }
         Text(
           text = "$bufferedSeconds s buffered",
           color = Color.White.copy(alpha = 0.82f),

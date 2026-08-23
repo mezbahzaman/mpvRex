@@ -1,4 +1,17 @@
-# mpvRex Stremio Edition 4.5.26
+# mpvRex Stremio Edition 4.5.27
+
+## Changed
+
+- Restored IP, country, and country-flag stream information.
+- Stream-info network features now activate only during startup’s visible
+  information phase or while the panel is manually enabled.
+- ipwho.is is queried once per stream activation instead of every minute.
+- After the overlay auto-dismisses at 5 seconds buffered, ping, torrent, swarm,
+  and IP lookups become idle until the panel is manually opened again.
+- The stream-info polling coroutine itself is cancelled while idle and resumes
+  immediately for a new stream or manual panel open.
+
+## Previous Release
 
 ## Changed
 

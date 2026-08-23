@@ -32,6 +32,7 @@ import java.net.URLDecoder
 import xyz.mpv.rex.utils.media.StreamStats
 import xyz.mpv.rex.utils.media.StreamStatsFetcher
 import xyz.mpv.rex.utils.media.StreamTuning
+import xyz.mpv.rex.utils.media.IpWhoisDetails
 import xyz.mpv.rex.utils.media.TorrentStats
 import `is`.xyz.mpv.MPVLib
 import kotlinx.collections.immutable.persistentListOf
@@ -492,15 +493,28 @@ class PlayerViewModel(
       }
     }
 
-    // Poll all live stream information at the user-selected cadence.
+    // Poll stream information only during startup auto-display or while manually open.
     viewModelScope.launch {
-      var nextStatsUpdateMs = SystemClock.elapsedRealtime()
-      while (isActive) {
-        updateStreamStats()
-        nextStatsUpdateMs += 1000L
-        val waitMs = nextStatsUpdateMs - SystemClock.elapsedRealtime()
-        if (waitMs > 0L) delay(waitMs) else nextStatsUpdateMs = SystemClock.elapsedRealtime()
+      combine(
+        streamStatsPanelVisible,
+        _streamInfoDismissed,
+        _streamInfoAutoConsumed,
+      ) { manuallyVisible, dismissed, autoConsumed ->
+        manuallyVisible || (!dismissed && !autoConsumed)
+      }.collectLatest { active ->
+        if (active) {
+          while (isActive) {
+            val startedAt = SystemClock.elapsedRealtime()
+            updateStreamStats()
+            delay((1_000L - (SystemClock.elapsedRealtime() - startedAt)).coerceAtLeast(0L))
+          }
+        }
       }
+    }
+
+    // A new mpv path resets auto-display state and wakes the gated stats loop.
+    viewModelScope.launch {
+      MPVLib.propString["path"].collect { updateStreamStats() }
     }
 
     // Auto-download subtitles for eligible streams and local files without subtitles.
@@ -2349,6 +2363,8 @@ class PlayerViewModel(
   private var streamProtocol = ""
   private var lastTorrentStatsPollMs = 0L
   private var lastPingPollMs = 0L
+  private var ipWhoisDetails: IpWhoisDetails? = null
+  private var ipWhoisLoadedGeneration = -1L
 
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
@@ -2630,6 +2646,8 @@ class PlayerViewModel(
       lastHttpSampleMs = SystemClock.elapsedRealtime()
       lastTorrentStatsPollMs = 0L
       lastPingPollMs = 0L
+      ipWhoisDetails = null
+      ipWhoisLoadedGeneration = -1L
     }
     val isNetwork = path != null && StreamTuning.isNetworkUri(path)
     if (!isNetwork) {
@@ -2650,9 +2668,12 @@ class PlayerViewModel(
       ?.let(StreamStatsFetcher::parseInfoHash)
     coroutineScope {
       val now = SystemClock.elapsedRealtime()
-      val pollIntervalMs = if (streamStatsPanelVisible.value) 5_000L else 15_000L
-      val pingIntervalMs = if (streamStatsPanelVisible.value) 5_000L else 30_000L
-      val torrentStatsDeferred = if (infoHash != null && now - lastTorrentStatsPollMs >= pollIntervalMs) {
+      val streamInfoActive = streamStatsPanelVisible.value ||
+        (!_streamInfoDismissed.value && !_streamInfoAutoConsumed.value)
+      val pollIntervalMs = 1_000L
+      val pingIntervalMs = 1_000L
+      val torrentStatsDeferred = if (streamInfoActive && infoHash != null &&
+        now - lastTorrentStatsPollMs >= pollIntervalMs) {
         lastTorrentStatsPollMs = now
         val statsUrl = StreamStatsFetcher.buildStatsUrl(path!!, infoHash)
         async(Dispatchers.IO) {
@@ -2661,13 +2682,17 @@ class PlayerViewModel(
           }
         }
       } else null
-      val pingDeferred = if (now - lastPingPollMs >= pingIntervalMs) {
+      val pingDeferred = if (streamInfoActive && now - lastPingPollMs >= pingIntervalMs) {
         lastPingPollMs = now
         async(Dispatchers.IO) {
           withTimeoutOrNull(900L) {
             StreamStatsFetcher.fetchPingMs(extraPreferences.pingHost.get().trim())
           }
         }
+      } else null
+      val ipWhoisDeferred = if (streamInfoActive && ipWhoisLoadedGeneration != streamStatsGeneration) {
+        ipWhoisLoadedGeneration = streamStatsGeneration
+        async(Dispatchers.IO) { withTimeoutOrNull(1_500L) { StreamStatsFetcher.fetchIpWhoisDetails() } }
       } else null
 
       if (infoHash != null) {
@@ -2701,7 +2726,8 @@ class PlayerViewModel(
     if (streamProtocol.isBlank()) {
       streamProtocol = if (isTorrent) "P2P" else Uri.parse(path).scheme?.uppercase().orEmpty()
     }
-    pingDeferred?.await()?.let { pingMs = it }
+      pingDeferred?.await()?.let { pingMs = it }
+      ipWhoisDeferred?.await()?.let { ipWhoisDetails = it }
 
     val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())
     val httpSpeed = if (currentRxBytes != TrafficStats.UNSUPPORTED.toLong() &&
@@ -2744,6 +2770,9 @@ class PlayerViewModel(
         pingMs = pingMs,
         pingTarget = extraPreferences.pingHost.get().trim(),
         protocol = streamProtocol,
+        ip = ipWhoisDetails?.ip.orEmpty(),
+        ipCountry = ipWhoisDetails?.country.orEmpty(),
+        ipCountryFlag = ipWhoisDetails?.countryFlag.orEmpty(),
         speedBytesPerSec = speedBytesPerSec,
       )
     }

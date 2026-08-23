@@ -35,7 +35,16 @@ data class StreamStats(
   val pingMs: Int? = null,
   val pingTarget: String = "",
   val protocol: String = "",
+  val ip: String = "",
+  val ipCountry: String = "",
+  val ipCountryFlag: String = "",
   val speedBytesPerSec: Long = 0,
+)
+
+data class IpWhoisDetails(
+  val ip: String,
+  val country: String,
+  val countryFlag: String,
 )
 
 data class TorrentStats(
@@ -74,6 +83,41 @@ object StreamStatsFetcher {
       process?.destroy()
     }
   }
+
+  /** Retrieves this device/network's public IP, country, and flag once per stream activation. */
+  fun fetchIpWhoisDetails(): IpWhoisDetails? {
+    var connection: HttpURLConnection? = null
+    return try {
+      connection = URL("https://ipwho.is/?fields=ip,success,country,flag.emoji").openConnection() as HttpURLConnection
+      connection.connectTimeout = STATS_TIMEOUT_MS
+      connection.readTimeout = STATS_TIMEOUT_MS
+      connection.requestMethod = "GET"
+      connection.setRequestProperty("Accept", "application/json")
+      if (connection.responseCode !in 200..299) return null
+      parseIpWhoisDetails(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
+    } catch (_: Exception) {
+      null
+    } finally {
+      connection?.disconnect()
+    }
+  }
+
+  internal fun parseIpWhoisDetails(json: JSONObject): IpWhoisDetails? {
+    if (!json.optBoolean("success", false)) return null
+    val ip = json.optString("ip").trim()
+    val country = json.optString("country").trim()
+    val flag = json.optJSONObject("flag")?.optString("emoji").orEmpty().trim()
+    if (ip.isBlank() || country.isBlank() || flag.isBlank()) return null
+    return IpWhoisDetails(ip, country, flag)
+  }
+
+  internal fun formatStreamIdentity(stats: StreamStats): String = listOfNotNull(
+    stats.protocol.takeIf { it.isNotBlank() },
+    stats.ip.takeIf { it.isNotBlank() },
+    stats.ipCountry.takeIf { it.isNotBlank() }?.let { country ->
+      "$country${stats.ipCountryFlag.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()}"
+    },
+  ).joinToString(" • ")
 
 
   internal fun parsePingMs(output: String): Int? =
