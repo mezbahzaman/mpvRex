@@ -1451,7 +1451,7 @@ private fun FileSystemBrowserContent(
   }
 
   // Generate thumbnails sequentially
-  LaunchedEffect(folderId, showVideoThumbnails, videos.size, thumbWidthPx, thumbHeightPx) {
+  androidx.compose.runtime.DisposableEffect(folderId, showVideoThumbnails, videos.size, thumbWidthPx, thumbHeightPx) {
     if (showVideoThumbnails && videos.isNotEmpty()) {
       thumbnailRepository.startFolderThumbnailGeneration(
         folderId = folderId,
@@ -1459,6 +1459,9 @@ private fun FileSystemBrowserContent(
         widthPx = thumbWidthPx,
         heightPx = thumbHeightPx,
       )
+    }
+    onDispose {
+      thumbnailRepository.cancelFolderThumbnailGeneration(folderId)
     }
   }
 

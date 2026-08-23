@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -38,7 +40,7 @@ class ThumbnailRepository(
     ) 
   }
   private val diskCacheDimension = 1024
-  private val diskJpegQuality = 100
+  private val diskJpegQuality = 85
   private val memoryCache: LruCache<String, Bitmap>
   private val networkDiskDir: File = File(context.filesDir, "thumbnails/network").apply { mkdirs() }
   private val localDiskDir: File  = File(context.filesDir, "thumbnails/local").apply  { mkdirs() }
@@ -46,6 +48,13 @@ class ThumbnailRepository(
 
   private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val maxconcurrentfolders = 3
+
+  /**
+   * Caps simultaneous heavy extractions (mpv/MediaMetadataRetriever). Without this,
+   * every composed card could spin its own decoder pipeline in parallel and starve
+   * low-core devices.
+   */
+  private val extractionPermits = Semaphore(2)
 
   private data class FolderState(
     val signature: String,
@@ -111,7 +120,11 @@ class ThumbnailRepository(
       val deferred =
         async {
           try {
-            loadFromDisk(video, forceFirstFrame = forceFirstFrame)?.let { thumbnail ->
+            loadFromDisk(
+              video,
+              targetDimension = decodeDimensionFor(widthPx, heightPx),
+              forceFirstFrame = forceFirstFrame,
+            )?.let { thumbnail ->
               if (isNetworkUrl(video.path)) networkMemoryKeys.add(key)
               memoryCache.put(key, thumbnail)
               _thumbnailReadyKeys.tryEmit(key)
@@ -125,7 +138,8 @@ class ThumbnailRepository(
             val videoKey = videoBaseKey(video)
             val isAudio = video.isAudio || xyz.mpv.rex.utils.storage.FileTypeUtils.isAudioFile(java.io.File(video.path))
 
-            val thumbnail = if (forceFirstFrame) {
+            val thumbnail = extractionPermits.withPermit {
+              if (forceFirstFrame) {
               // Direct first-frame extraction for fast thumbnail generation
               generateWithFastThumbnails(video, diskCacheDimension, targetOffsetsOverride = listOf(0.0))
                 ?: generateWithMediaMetadataRetriever(video, diskCacheDimension, targetOffsetsOverride = listOf(0L))
@@ -219,6 +233,7 @@ class ThumbnailRepository(
                 }
               }
               }
+              }
             }
 
             if (thumbnail == null) {
@@ -252,7 +267,11 @@ class ThumbnailRepository(
       
       val key = thumbnailKey(video, widthPx, heightPx, forceFirstFrame)
       synchronized(memoryCache) { memoryCache.get(key) }?.let { return@withContext it }
-      loadFromDisk(video, forceFirstFrame = forceFirstFrame)?.let { thumbnail ->
+      loadFromDisk(
+        video,
+        targetDimension = decodeDimensionFor(widthPx, heightPx),
+        forceFirstFrame = forceFirstFrame,
+      )?.let { thumbnail ->
         synchronized(memoryCache) {
           if (isNetworkUrl(video.path)) networkMemoryKeys.add(key)
           memoryCache.put(key, thumbnail)
@@ -371,6 +390,15 @@ class ThumbnailRepository(
     val base = videoBaseKey(video)
     val suffix = if (forceFirstFrame) "|forceFirstFrame" else ""
     return "$base|$width|$height$suffix"
+  }
+
+  /** Decode disk images no larger than the UI actually displays (bounded below for quality). */
+  private fun decodeDimensionFor(widthPx: Int, heightPx: Int): Int =
+    maxOf(widthPx, heightPx).coerceIn(256, diskCacheDimension)
+
+  /** Stops a folder's background generation when its screen leaves composition. */
+  fun cancelFolderThumbnailGeneration(folderId: String) {
+    folderJobs.remove(folderId)?.cancel()
   }
 
   private fun videoBaseKey(video: Video): String {

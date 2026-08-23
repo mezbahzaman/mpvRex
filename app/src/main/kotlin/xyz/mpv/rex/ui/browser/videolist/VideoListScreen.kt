@@ -747,7 +747,7 @@ fun VideoListContent(
   val thumbWidthPx = with(density) { thumbWidthDp.roundToPx() }
   val thumbHeightPx = (thumbWidthPx / aspect).toInt()
 
-  LaunchedEffect(folderId, showVideoThumbnails, videosWithInfo.size, thumbWidthPx, thumbHeightPx) {
+  androidx.compose.runtime.DisposableEffect(folderId, showVideoThumbnails, videosWithInfo.size, thumbWidthPx, thumbHeightPx) {
     if (showVideoThumbnails && videosWithInfo.isNotEmpty()) {
       thumbnailRepository.startFolderThumbnailGeneration(
         folderId = folderId,
@@ -755,6 +755,9 @@ fun VideoListContent(
         widthPx = thumbWidthPx,
         heightPx = thumbHeightPx,
       )
+    }
+    onDispose {
+      thumbnailRepository.cancelFolderThumbnailGeneration(folderId)
     }
   }
 

@@ -287,7 +287,7 @@ fun PlaylistSheet(
 
   // Thumbnail cache with LRU eviction - limited size to prevent memory issues with large playlists
   val thumbnailCache by remember {
-    mutableStateOf(LRUBitmapCache(maxSize = 50))
+    mutableStateOf(LRUBitmapCache(maxSize = 24))
   }
 
   // Scroll state for the playlist

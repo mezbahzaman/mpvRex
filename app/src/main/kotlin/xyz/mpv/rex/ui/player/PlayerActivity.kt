@@ -196,7 +196,43 @@ class PlayerActivity :
   private val miniPlayerStateManager: MiniPlayerStateManager by inject()
   private val headlessPlaybackController: HeadlessPlaybackController by inject()
   private val thumbnailRepository: ThumbnailRepository by inject()
-  private val uriThumbnailCache = android.util.LruCache<String, android.graphics.Bitmap>(32)
+  // Byte-budgeted (~24 MiB) so full-resolution art can never balloon memory.
+  private val uriThumbnailCache =
+    object : android.util.LruCache<String, android.graphics.Bitmap>(24 * 1024) {
+      override fun sizeOf(
+        key: String,
+        value: android.graphics.Bitmap,
+      ): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+
+  /** Decodes embedded pictures sampled down to at most [maxDim] on their longest side. */
+  private fun decodePictureBounded(picture: ByteArray, maxDim: Int = 512): android.graphics.Bitmap? {
+    if (picture.isEmpty()) return null
+    return runCatching {
+      val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      android.graphics.BitmapFactory.decodeByteArray(picture, 0, picture.size, bounds)
+      val longest = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+      var inSampleSize = 1
+      while (longest / (inSampleSize * 2) >= maxDim) inSampleSize *= 2
+      val options = android.graphics.BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+      android.graphics.BitmapFactory.decodeByteArray(picture, 0, picture.size, options)
+    }.getOrNull()
+  }
+
+  /** Scales an already-decoded bitmap down to [maxDim] on its longest side. */
+  private fun scaleDownForCache(bitmap: android.graphics.Bitmap, maxDim: Int = 512): android.graphics.Bitmap {
+    val longest = maxOf(bitmap.width, bitmap.height)
+    if (longest <= maxDim) return bitmap
+    val scale = maxDim.toFloat() / longest
+    return runCatching {
+      android.graphics.Bitmap.createScaledBitmap(
+        bitmap,
+        (bitmap.width * scale).toInt().coerceAtLeast(1),
+        (bitmap.height * scale).toInt().coerceAtLeast(1),
+        true,
+      )
+    }.getOrDefault(bitmap)
+  }
 
   /**
    * Track selector for automatic audio/subtitle selection
@@ -3563,10 +3599,11 @@ class PlayerActivity :
           }
           val picture = retriever.embeddedPicture
           if (picture != null) {
-            val bitmap = android.graphics.BitmapFactory.decodeByteArray(picture, 0, picture.size)
-            if (bitmap != null && !bitmap.isRecycled) {
-              uriThumbnailCache.put(key, bitmap)
-              return@withContext bitmap
+            decodePictureBounded(picture)?.let { bitmap ->
+              if (!bitmap.isRecycled) {
+                uriThumbnailCache.put(key, bitmap)
+                return@withContext bitmap
+              }
             }
           }
         } finally {
@@ -3613,10 +3650,11 @@ class PlayerActivity :
 
         val picture = retriever.embeddedPicture
         if (picture != null) {
-          val bitmap = android.graphics.BitmapFactory.decodeByteArray(picture, 0, picture.size)
-          if (bitmap != null && !bitmap.isRecycled) {
-            uriThumbnailCache.put(cacheKey, bitmap)
-            return@withContext bitmap
+          decodePictureBounded(picture)?.let { bitmap ->
+            if (!bitmap.isRecycled) {
+              uriThumbnailCache.put(cacheKey, bitmap)
+              return@withContext bitmap
+            }
           }
         }
 
@@ -3628,7 +3666,7 @@ class PlayerActivity :
           } else null
           val fallbackFrame = frame ?: retriever.getFrameAtTime(seekUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
           if (fallbackFrame != null && !fallbackFrame.isRecycled && !isMostlySolidThumbnail(fallbackFrame)) {
-            uriThumbnailCache.put(cacheKey, fallbackFrame)
+            uriThumbnailCache.put(cacheKey, scaleDownForCache(fallbackFrame))
             return@withContext fallbackFrame
           }
 
