@@ -1,4 +1,15 @@
-# mpvRex Stremio Edition 4.5.27
+# mpvRex Stremio Edition 4.5.28
+
+## Fixed
+
+- Fixed the ping probe timeout so ping updates participate in the same
+  one-second stream-info cycle as buffer, seeds, peers, and speed.
+- Manual overlay activation now starts a fresh IP lookup and immediate stats
+  reads.
+- Closing or auto-dismissing the overlay cancels the active swarm lookup and
+  leaves no stream-info network reader running in the background.
+
+## Previous Release
 
 ## Changed
 

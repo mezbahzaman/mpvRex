@@ -71,7 +71,7 @@ object StreamStatsFetcher {
       process = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "1", target)
         .redirectErrorStream(true)
         .start()
-      if (!process.waitFor(1500, TimeUnit.MILLISECONDS)) {
+      if (!process.waitFor(800, TimeUnit.MILLISECONDS)) {
         process.destroyForcibly()
         return null
       }

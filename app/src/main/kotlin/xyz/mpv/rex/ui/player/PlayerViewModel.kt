@@ -2354,6 +2354,7 @@ class PlayerViewModel(
   private var swarmSeeds: Int? = null
   private var lastSwarmPollMs = 0L
   private var swarmPollInFlight = false
+  private var swarmPollJob: Job? = null
   private var lastStatsPath: String? = null
   private var lastHttpRxBytes = TrafficStats.UNSUPPORTED.toLong()
   private var lastHttpSampleMs = 0L
@@ -2369,12 +2370,18 @@ class PlayerViewModel(
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
     _streamInfoDismissed.value = false
+    ipWhoisLoadedGeneration = -1L
+    lastPingPollMs = 0L
+    lastTorrentStatsPollMs = 0L
     viewModelScope.launch { updateStreamStats() }
   }
 
   fun dismissStreamInfo() {
     streamStatsPanelVisible.value = false
     _streamInfoDismissed.value = true
+    swarmPollJob?.cancel()
+    swarmPollJob = null
+    swarmPollInFlight = false
   }
 
   fun markStremioHandoff(value: Boolean) {
@@ -2749,6 +2756,10 @@ class PlayerViewModel(
       lastVideoPlaying = true
       if (!_streamInfoAutoConsumed.value && bufferedSeconds >= 5f) {
         _streamInfoAutoConsumed.value = true
+        streamStatsPanelVisible.value = false
+        swarmPollJob?.cancel()
+        swarmPollJob = null
+        swarmPollInFlight = false
         Log.d(TAG, "StreamInfo: video begun with ${bufferedSeconds}s buffered, auto overlay consumed")
       }
     } else if (lastVideoPlaying && timePos <= 0.5) {
@@ -2785,7 +2796,7 @@ class PlayerViewModel(
     lastSwarmPollMs = now
     swarmPollInFlight = true
     val expectedPath = lastStatsPath
-    viewModelScope.launch {
+    swarmPollJob = viewModelScope.launch {
       try {
         val result = withContext(Dispatchers.IO) {
           StreamStatsFetcher.fetchSwarmSeeds(infoHash, stats.trackerUrls)
@@ -2796,6 +2807,7 @@ class PlayerViewModel(
         }
       } finally {
         swarmPollInFlight = false
+        swarmPollJob = null
       }
     }
   }
