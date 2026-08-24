@@ -1,3 +1,22 @@
+# mpvRex Stremio Edition 4.5.33
+
+## Fixed
+
+- Stream-info sessions are now fully independent: pressing the info button
+  starts a completely fresh session — immediate ping, torrent-stats and
+  swarm-tracker probes plus a fresh IP/country lookup — and inherits nothing
+  from the startup phase or previous sessions.
+- Buffered-seconds figure regressed when the low-memory network buffer cap was
+  introduced in 4.5.30; on ≤4 GB devices the default cap is raised from 96 MiB
+  to 160 MiB so real buffering depth (and the overlay's number) matches what
+  earlier versions showed, while still staying below the stock 200 MiB that
+  starved background processes.
+- Confirmed live update contract while the overlay is open: ping, speed,
+  peers, and buffered seconds all refresh together once per second, and a
+  failed cycle no longer stops the flow.
+
+## Previous Release
+
 # mpvRex Stremio Edition 4.5.32
 
 ## Added

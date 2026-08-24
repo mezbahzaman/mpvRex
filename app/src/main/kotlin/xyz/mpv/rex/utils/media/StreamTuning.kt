@@ -32,8 +32,14 @@ object StreamTuning {
   internal const val MIN_BUFFERED_SECONDS = 10
   internal const val MAX_BUFFERED_SECONDS = 3600
 
-  /** Default download budget on devices with ≤4 GB total RAM when the user never changed it. */
-  private const val LOW_RAM_DEFAULT_DOWNLOAD_MIB = 96
+  /**
+   * Default download budget on devices with ≤4 GB total RAM when the user never
+   * changed it. 160 MiB keeps meaningful readahead (~2-3 min at typical bitrates,
+   * so the overlay's buffered-seconds figure behaves like it did before the cap
+   * existed) while still sitting well below the old stock 200 MiB that was
+   * starving background processes on low-memory devices.
+   */
+  private const val LOW_RAM_DEFAULT_DOWNLOAD_MIB = 160
   private const val LOW_RAM_TOTAL_MEM_BYTES = 4600L * 1024L * 1024L
 
   fun isNetworkUri(uri: String): Boolean {

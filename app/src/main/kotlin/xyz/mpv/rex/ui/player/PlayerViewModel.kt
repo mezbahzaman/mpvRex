@@ -2394,9 +2394,16 @@ class PlayerViewModel(
   fun showStreamInfo() {
     streamStatsPanelVisible.value = true
     _streamInfoDismissed.value = false
-    ipWhoisLoadedGeneration = -1L
-    lastPingPollMs = 0L
-    lastTorrentStatsPollMs = 0L
+    // Every manual session is fully independent: drop everything the startup
+    // phase (or a previous manual session) left behind, then probe everything
+    // immediately on the first cycle.
+    ipWhoisLoadedGeneration = -1L   // fresh IP / country / flag lookup
+    lastPingPollMs = 0L             // immediate ping probe
+    lastTorrentStatsPollMs = 0L     // immediate torrent-stats probe
+    lastSwarmPollMs = 0L            // immediate swarm-tracker query
+    lastKnownSeeds = 0              // no inherited seeder counts
+    swarmSeeds = null               // no inherited global-swarm count
+    lastTorrentStats = null         // no inherited peers/speed snapshot
   }
 
   fun dismissStreamInfo() {
