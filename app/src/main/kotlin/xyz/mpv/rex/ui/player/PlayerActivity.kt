@@ -1263,15 +1263,48 @@ class PlayerActivity :
   private fun setIntentExtras(extras: Bundle?) {
     if (extras == null) return
 
-    StremioHandoff.positionMs(extras)?.let {
-      intentPositionMs = it
-      lastKnownPositionMs = it
-      MPVLib.setPropertyDouble("time-pos", intentPositionMs.toDouble() / MILLISECONDS_TO_SECONDS)
+    StremioHandoff.positionMs(extras)?.let { incoming ->
+      // Local-resume precedence (Path 2): if Stremio forgot its progress because its
+      // process was killed earlier, it relaunches us with a near-zero position while
+      // mpvRex still remembers where this exact media actually stopped. In that case,
+      // resume from our own memory instead of restarting from the beginning.
+      lifecycleScope.launch {
+        val effectivePositionMs =
+          runCatching { localResumeOverrideMs(incoming) }.getOrNull() ?: incoming
+        intentPositionMs = effectivePositionMs
+        lastKnownPositionMs = effectivePositionMs
+        MPVLib.setPropertyDouble("time-pos", effectivePositionMs.toDouble() / MILLISECONDS_TO_SECONDS)
+        Log.d(TAG, "setIntentExtras: incoming=${incoming}ms effective=${effectivePositionMs}ms")
+      }
     }
     Log.d(TAG, "setIntentExtras: intentPositionMs=$intentPositionMs")
 
     addSubtitlesFromExtras(extras)
     setHttpHeadersFromExtras(extras)
+  }
+
+  /**
+   * Returns mpvRex's own remembered position when the incoming handoff position is
+   * near-zero but our saved state for this media is meaningfully further ahead.
+   * Returns null whenever Stremio's provided position should be trusted as-is.
+   */
+  private suspend fun localResumeOverrideMs(incomingPositionMs: Long): Long? {
+    if (incomingPositionMs > LOCAL_RESUME_TRUST_STREMIO_MAX_MS) return null
+    val identifier = mediaIdentifier.takeIf { it.isNotBlank() } ?: return null
+    val state = withContext(Dispatchers.IO) {
+      playbackStateRepository.getVideoDataByTitle(identifier)
+        ?: mediaIdentifierLegacy.takeIf { it.isNotBlank() && it != identifier }
+          ?.let { playbackStateRepository.getVideoDataByTitle(it) }
+    } ?: return null
+    val savedMs = state.lastPosition.toLong() * MILLISECONDS_TO_SECONDS
+    if (savedMs < LOCAL_RESUME_MIN_SAVED_MS) return null
+    if (savedMs <= incomingPositionMs + LOCAL_RESUME_MIN_ADVANCE_MS) return null
+    if (state.timeRemaining in 1 until LOCAL_RESUME_FINISHED_REMAINING_S) return null
+    Log.d(
+      TAG,
+      "Local resume: overriding incoming ${incomingPositionMs}ms with saved ${savedMs}ms ($identifier)",
+    )
+    return savedMs
   }
 
   /**
@@ -4278,6 +4311,10 @@ class PlayerActivity :
      * Constant used when playback position is not set.
      */
     private const val POSITION_NOT_SET = -1
+    private const val LOCAL_RESUME_TRUST_STREMIO_MAX_MS = 5_000L
+    private const val LOCAL_RESUME_MIN_SAVED_MS = 90_000L
+    private const val LOCAL_RESUME_MIN_ADVANCE_MS = 30_000L
+    private const val LOCAL_RESUME_FINISHED_REMAINING_S = 60
 
     /**
      * Maximum volume for MPV in percent.

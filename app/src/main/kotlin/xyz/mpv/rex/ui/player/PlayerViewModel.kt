@@ -42,6 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
@@ -505,7 +506,16 @@ class PlayerViewModel(
         if (active) {
           while (isActive) {
             val startedAt = SystemClock.elapsedRealtime()
-            updateStreamStats()
+            try {
+              updateStreamStats()
+            } catch (e: CancellationException) {
+              throw e
+            } catch (e: Exception) {
+              // One failed cycle (mpv teardown, transient parse error, ...) must
+              // never kill the collector: a dead collector is exactly the
+              // "overlay stops updating" bug.
+              Log.e(TAG, "StreamInfo: stats cycle failed, continuing", e)
+            }
             delay((1_000L - (SystemClock.elapsedRealtime() - startedAt)).coerceAtLeast(0L))
           }
         }

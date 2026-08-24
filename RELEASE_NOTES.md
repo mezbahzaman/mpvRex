@@ -1,3 +1,27 @@
+# mpvRex Stremio Edition 4.5.32
+
+## Added
+
+- Local-resume precedence for Stremio playback: when Stremio relaunches a
+  stream with a near-zero start position because its own progress was lost
+  (its process was killed earlier), mpvRex now resumes from its own remembered
+  position for that exact media instead of restarting from the beginning.
+  Stremio-provided positions are still trusted whenever they are meaningful,
+  and an essentially finished video is never force-resumed.
+
+## Fixed
+
+- The stream-information overlay could permanently stop refreshing after a
+  single failed stats cycle; each cycle is now fault-isolated, so enabling the
+  overlay always starts live updates again.
+
+## Removed
+
+- Reverted the experimental 30-second live-progress broadcasts (v4.5.31);
+  they had no effect with current Stremio builds.
+
+## Previous Release
+
 # mpvRex Stremio Edition 4.5.30
 
 ## Added
