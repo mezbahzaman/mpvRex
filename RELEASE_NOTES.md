@@ -1,3 +1,17 @@
+# mpvRex Stremio Edition 4.5.35
+
+## Changed
+
+- The "maximum buffered seconds" setting now behaves as both minimum and
+  maximum: a stream always loads exactly the configured number of seconds
+  ahead of the playhead, every time, regardless of video bitrate. The byte
+  budget is automatically sized to cover the target (20 Mbps reference) so it
+  can never cut loading short — the seconds value remains the only stopping
+  condition. The overlay's buffered-seconds figure therefore climbs to your
+  configured target and holds there in real time.
+
+## Previous Release
+
 # mpvRex Stremio Edition 4.5.34
 
 ## Fixed

@@ -62,13 +62,31 @@ object StreamTuning {
     )
   }
 
+  /**
+   * The buffered-seconds setting is BOTH the minimum and the maximum load-ahead
+   * window: the stream must always load exactly that many seconds ahead of the
+   * playhead. To guarantee the seconds target is never cut short by the byte
+   * budget, the byte ceiling is raised to cover the target at a generous
+   * reference bitrate (20 Mbps). The time limit remains the real stopping
+   * condition — mpv stops readahead once the configured seconds are cached.
+   */
+  internal fun effectiveDownloadMiB(maximumDownloadMiB: Int, maximumBufferedSeconds: Int): Int {
+    val downloadMiB = maximumDownloadMiB.coerceIn(MIN_DOWNLOAD_MIB, MAX_DOWNLOAD_MIB)
+    val bufferedSeconds = maximumBufferedSeconds.coerceIn(MIN_BUFFERED_SECONDS, MAX_BUFFERED_SECONDS)
+    // 20 Mbps reference: 2.5 MB per second -> MiB per second ~= 2.5 (25/10).
+    val secondsRequiredMiB =
+      ((bufferedSeconds.toLong() * 25L) / 10L).coerceIn(1L, MAX_DOWNLOAD_MIB.toLong()).toInt()
+    return maxOf(downloadMiB, secondsRequiredMiB)
+  }
+
   fun applyTuningForUri(
     uri: String?,
     maximumDownloadMiB: Int = DEFAULT_NETWORK_DOWNLOAD_MIB,
     maximumBufferedSeconds: Int = DEFAULT_BUFFERED_SECONDS,
   ) {
     if (uri.isNullOrBlank()) return
-    val cacheLimits = cacheLimits(maximumDownloadMiB, maximumBufferedSeconds)
+    val effectiveDownloadMiB = effectiveDownloadMiB(maximumDownloadMiB, maximumBufferedSeconds)
+    val cacheLimits = cacheLimits(effectiveDownloadMiB, maximumBufferedSeconds)
     when {
       isStremioTorrentUri(uri) -> {
         // Torrent (Stremio WebTorrent) server: peers are slow, so read far ahead

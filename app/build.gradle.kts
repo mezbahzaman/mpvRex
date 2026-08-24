@@ -17,8 +17,8 @@ android {
     applicationId = "xyz.mpv.rex"
     minSdk = 26
     targetSdk = 36
-    versionCode = 257
-    versionName = "4.5.34"
+    versionCode = 258
+    versionName = "4.5.35"
 
     vectorDrawables {
       useSupportLibrary = true
