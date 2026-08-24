@@ -265,6 +265,15 @@ class PlayerActivity :
   private var lastKnownPositionMs: Long? = null
   private var lastKnownDurationMs: Long? = null
   private var lastSnapshotWriteMs = 0L
+  private var lastProgressBroadcastMs = 0L
+
+  /**
+   * Live-progress reporting interval for Stremio handoff playback. Stremio listens for
+   * result broadcasts only while its own process is alive, so progress is pushed
+   * continuously instead of once at exit: if Stremio is killed mid-movie, everything
+   * watched up to that point is already recorded on its side.
+   */
+  private val progressBroadcastIntervalMs = 30_000L
 
   /**
    * Helper for managing Picture-in-Picture mode.
@@ -1850,6 +1859,21 @@ class PlayerActivity :
         lastSnapshotWriteMs = now
         if (isStremioHandoff(intent)) {
           StremioProgressSnapshot.save(this, lastKnownPositionMs, lastKnownDurationMs, true)
+        }
+      }
+      // Path-1 live progress: push the current position to Stremio periodically so
+      // progress survives Stremio being killed mid-playback (its runtime result
+      // listener only exists while its process lives). Identical intent shape to
+      // the crash-path broadcast.
+      if (
+        now - lastProgressBroadcastMs >= progressBroadcastIntervalMs &&
+        isStremioHandoff(intent) &&
+        !isFinishing &&
+        lastKnownPositionMs != null
+      ) {
+        lastProgressBroadcastMs = now
+        runCatching {
+          sendBroadcast(StremioHandoff.resultIntent(lastKnownPositionMs, lastKnownDurationMs))
         }
       }
     }

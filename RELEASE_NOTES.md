@@ -1,3 +1,15 @@
+# mpvRex Stremio Edition 4.5.31
+
+## Added
+
+- Live progress reporting for Stremio playback: while a Stremio-handoff video
+  plays, the current position is broadcast to Stremio every 30 seconds using
+  the same result format as the existing crash path. If Stremio's process is
+  killed mid-movie, everything watched up to that point is already recorded
+  on its side instead of losing the whole session's progress.
+
+## Previous Release
+
 # mpvRex Stremio Edition 4.5.30
 
 ## Added
