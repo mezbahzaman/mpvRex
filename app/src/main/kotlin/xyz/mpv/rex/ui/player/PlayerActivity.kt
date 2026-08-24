@@ -1293,7 +1293,7 @@ class PlayerActivity :
     val identifier = mediaIdentifier.takeIf { it.isNotBlank() } ?: return null
     val state = withContext(Dispatchers.IO) {
       playbackStateRepository.getVideoDataByTitle(identifier)
-        ?: mediaIdentifierLegacy.takeIf { it.isNotBlank() && it != identifier }
+        ?: legacyMediaIdentifier.takeIf { it.isNotBlank() && it != identifier }
           ?.let { playbackStateRepository.getVideoDataByTitle(it) }
     } ?: return null
     val savedMs = state.lastPosition.toLong() * MILLISECONDS_TO_SECONDS
