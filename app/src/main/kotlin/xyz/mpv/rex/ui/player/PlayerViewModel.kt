@@ -2763,7 +2763,12 @@ class PlayerViewModel(
     if (streamProtocol.isBlank()) {
       streamProtocol = if (isTorrent) "P2P" else Uri.parse(path).scheme?.uppercase().orEmpty()
     }
-      pingDeferred?.await()?.let { pingMs = it }
+      // A probe ran this cycle: assign its result directly, so a failed probe
+      // (network down or timeout) clears the stale latency and the overlay
+      // shows "--" instead of freezing on the last successful value.
+      if (pingDeferred != null) {
+        pingMs = pingDeferred.await()
+      }
       ipWhoisDeferred?.await()?.let { ipWhoisDetails = it }
 
     val currentRxBytes = TrafficStats.getUidRxBytes(android.os.Process.myUid())

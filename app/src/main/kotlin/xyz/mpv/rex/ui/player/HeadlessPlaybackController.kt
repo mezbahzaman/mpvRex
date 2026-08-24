@@ -290,11 +290,7 @@ class HeadlessPlaybackController(private val appContext: Context) : KoinComponen
     val playable = uri.resolveUri(appContext) ?: uri.toString()
     StreamTuning.applyTuningForUri(
       playable,
-      StreamTuning.resolveNetworkDownloadMiB(
-        appContext,
-        extraPreferences.maximumNetworkDownloadMiB.get(),
-        extraPreferences.maximumNetworkDownloadMiB.isSet(),
-      ),
+      extraPreferences.maximumNetworkDownloadMiB.get(),
       extraPreferences.maximumBufferedSeconds.get(),
     )
     runCatching { MPVLib.command("loadfile", playable) }

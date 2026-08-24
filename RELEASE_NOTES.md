@@ -1,3 +1,23 @@
+# mpvRex Stremio Edition 4.5.34
+
+## Fixed
+
+- Buffered seconds now honor the Extra Settings value exactly. A hidden
+  low-memory byte-cap override (added in 4.5.30) was silently binding before
+  the user's "maximum buffered seconds" target, so a stream set to load e.g.
+  180 s ahead stopped early and the overlay reported the smaller figure. The
+  user's buffered-seconds setting is once again authoritative: readahead stops
+  precisely at the configured target, and the overlay shows real remaining
+  buffered seconds, live, every cycle.
+- Ping now reflects network loss: while the info overlay is open, a failed
+  ping probe (network down or timeout) immediately clears the stale latency
+  (shown as "--") instead of freezing on the last successful value.
+- Info-overlay sessions are fully independent: enabling it starts fresh
+  probes for ping, torrent stats, swarm trackers and IP/country, updates all
+  fields once per second until manually disabled, then hibernates completely.
+
+## Previous Release
+
 # mpvRex Stremio Edition 4.5.33
 
 ## Fixed

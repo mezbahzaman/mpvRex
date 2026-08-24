@@ -1,7 +1,5 @@
 package xyz.mpv.rex.utils.media
 
-import android.app.ActivityManager
-import android.content.Context
 import android.net.Uri
 import `is`.xyz.mpv.MPVLib
 import java.net.URI
@@ -32,16 +30,6 @@ object StreamTuning {
   internal const val MIN_BUFFERED_SECONDS = 10
   internal const val MAX_BUFFERED_SECONDS = 3600
 
-  /**
-   * Default download budget on devices with ≤4 GB total RAM when the user never
-   * changed it. 160 MiB keeps meaningful readahead (~2-3 min at typical bitrates,
-   * so the overlay's buffered-seconds figure behaves like it did before the cap
-   * existed) while still sitting well below the old stock 200 MiB that was
-   * starving background processes on low-memory devices.
-   */
-  private const val LOW_RAM_DEFAULT_DOWNLOAD_MIB = 160
-  private const val LOW_RAM_TOTAL_MEM_BYTES = 4600L * 1024L * 1024L
-
   fun isNetworkUri(uri: String): Boolean {
     val scheme = runCatching { Uri.parse(uri).scheme }.getOrNull()?.lowercase()
     return scheme in NETWORK_SCHEMES
@@ -61,28 +49,10 @@ object StreamTuning {
   }
 
   /**
-   * Effective download budget: honors an explicit user value, otherwise picks a
-   * smaller, RAM-aware default on low-memory devices.
+   * The user's Extra Settings values are authoritative: `maximum_buffered_seconds`
+   * decides how far ahead the stream loads, and mpv stops readahead once that
+   * target is reached. No hidden device-based override may shrink it.
    */
-  fun resolveNetworkDownloadMiB(
-    context: Context,
-    configuredMiB: Int,
-    userConfigured: Boolean,
-  ): Int {
-    if (userConfigured || configuredMiB != DEFAULT_NETWORK_DOWNLOAD_MIB) return configuredMiB
-    return if (isLowRamDevice(context)) LOW_RAM_DEFAULT_DOWNLOAD_MIB else configuredMiB
-  }
-
-  private fun isLowRamDevice(context: Context): Boolean =
-    runCatching {
-      val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        ?: return@runCatching false
-      if (activityManager.isLowRamDevice) return@runCatching true
-      val info = ActivityManager.MemoryInfo()
-      activityManager.getMemoryInfo(info)
-      info.totalMem in 1 until LOW_RAM_TOTAL_MEM_BYTES
-    }.getOrDefault(false)
-
   internal fun cacheLimits(maximumDownloadMiB: Int, maximumBufferedSeconds: Int): CacheLimits {
     val downloadMiB = maximumDownloadMiB.coerceIn(MIN_DOWNLOAD_MIB, MAX_DOWNLOAD_MIB)
     val bufferedSeconds = maximumBufferedSeconds.coerceIn(MIN_BUFFERED_SECONDS, MAX_BUFFERED_SECONDS)

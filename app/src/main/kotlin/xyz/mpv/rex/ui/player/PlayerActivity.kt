@@ -1435,11 +1435,7 @@ class PlayerActivity :
   private fun applyStreamTuning(uri: String?) {
     StreamTuning.applyTuningForUri(
       uri = uri,
-      maximumDownloadMiB = StreamTuning.resolveNetworkDownloadMiB(
-        this,
-        extraPreferences.maximumNetworkDownloadMiB.get(),
-        extraPreferences.maximumNetworkDownloadMiB.isSet(),
-      ),
+      maximumDownloadMiB = extraPreferences.maximumNetworkDownloadMiB.get(),
       maximumBufferedSeconds = extraPreferences.maximumBufferedSeconds.get(),
     )
   }
